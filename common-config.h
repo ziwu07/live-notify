@@ -3,7 +3,7 @@
 #include "common.h"
 #include <string.h>
 
-#define CONFIG_FILE_MAGIC (*(u32 *)"ziwu")
+#define CONFIG_FILE_MAGIC (*(u64 *)"ziwu07nc")
 
 struct ptr_string {
   u8 *start;
@@ -25,7 +25,7 @@ struct __attribute__((__packed__)) offset_string {
  */
 
 struct __attribute__((__packed__)) config_file_header {
-  u32 magic;
+  u64 magic;
   u32 version;
   u32 num_entry;
   u32 query_str_len;

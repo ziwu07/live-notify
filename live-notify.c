@@ -133,18 +133,17 @@ internal struct live_status *parse_json(struct arena *arena, c8 *pfp_path, u32 p
   u64 size = data->size;
   i32 ret = jsmn_parse(&parser, (c8 *)buf, size, tokens, (JSON_BUF_MAX / sizeof(jsmntok_t)));
   if (unlikely(ret < 0)) {
-    // switch (ret) {
-    // case JSMN_ERROR_INVAL: {
-    //   write(1, "JSMN_ERROR_INVAL\n", 18);
-    // } break;
-    // case JSMN_ERROR_NOMEM: {
-    //   write(1, "JSMN_ERROR_NOMEM\n", 18);
-    // } break;
-    // case JSMN_ERROR_PART: {
-    //   write(1, "JSMN_ERROR_PART\n", 17);
-    // } break;
-    // }
-    // TODO: better error message
+    switch (ret) {
+    case JSMN_ERROR_INVAL:
+      fprintf(stderr, "Error: JSON parsing failed — invalid JSON input\n");
+      break;
+    case JSMN_ERROR_NOMEM:
+      fprintf(stderr, "Error: JSON parsing failed — not enough tokens allocated\n");
+      break;
+    case JSMN_ERROR_PART:
+      fprintf(stderr, "Error: JSON parsing failed — truncated JSON\n");
+      break;
+    }
     return 0;
   }
   u32 num_token = (u32)ret;
@@ -376,10 +375,15 @@ internal inline struct parsed_config_file parse_config(u8 *config_file, i64 file
   struct parsed_config_file res;
   struct config_file_header *header = (struct config_file_header *)config_file;
   if (unlikely(header->magic != CONFIG_FILE_MAGIC)) {
-    // TODO: error on invalid magic
+    fprintf(stderr, "Error: config.bin has invalid magic — regenerate with apply-config\n");
+    exit(1);
   }
   if (unlikely(header->version != 1)) {
-    // TODO: error on unsupported file version
+    fprintf(
+        stderr,
+        "Error: config.bin version %d is unsupported (expected 1) — regenerate with apply-config\n",
+        header->version);
+    exit(1);
   }
   res.entries = (struct config_file_entry *)(header + 1);
   res.num_entry = header->num_entry;

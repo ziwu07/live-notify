@@ -65,16 +65,18 @@ internal inline i32 parse_duration(const struct ptr_string val) {
     } else if (*endptr == 'h') {
       return result * 60 * 60 * 1000;
     } else {
-      // TODO: error on invalid postfix
+      fprintf(stderr, "Error: invalid duration postfix '%c' in '%.*s', expected 's', 'm', or 'h'\n",
+              *endptr, (i32)(val.end - val.start), val.start);
+      exit(1);
     }
   } else if ((u8 *)endptr == val.end) {
-    // default to seconds
+    // default to 's' postfix if none is found
     return result * 1000;
   } else {
-    // TODO: better error message on invalid default
+    fprintf(stderr, "Error: invalid duration value '%.*s', contains unexpected characters\n",
+            (i32)(val.end - val.start), val.start);
     exit(1);
   }
-  return (i32)result;
 }
 
 internal inline struct ptr_string parse_sound(const struct ptr_string val) {
@@ -195,7 +197,9 @@ internal u32 parse_config(u8 *config, u64 size, struct arena *arena,
           if ((field.end - (dv + 1) == 1) && (*(dv + 1) == '0' || *(dv + 1) == '1')) {
             parsed_default->open_direct = (u32)(*(dv + 1) - '0');
           } else {
-            // TODO: better error message on invalid default
+            fprintf(stderr,
+                    "Error: invalid open_direct default value '%.*s', expected '0' or '1'\n",
+                    (i32)(field.end - (dv + 1)), dv + 1);
             exit(1);
           }
           scan = eq + 1;
@@ -215,7 +219,10 @@ internal u32 parse_config(u8 *config, u64 size, struct arena *arena,
           c8 *endptr;
           i64 result = strtoll((c8 *)(dv + 1), &endptr, 10);
           if (result < 0 || result != (u32)result) {
-            // TODO: better error message on invalid default
+            fprintf(
+                stderr,
+                "Error: invalid duration default value '%.*s', not a valid non-negative integer\n",
+                (i32)(field.end - (dv + 1)), dv + 1);
             exit(1);
           }
           if ((u8 *)endptr == field.end - 1) {
@@ -226,13 +233,19 @@ internal u32 parse_config(u8 *config, u64 size, struct arena *arena,
             } else if (*endptr == 'h') {
               parsed_default->duration = result * 60 * 60 * 1000;
             } else {
-              // TODO: error on invalid postfix
+              fprintf(stderr,
+                      "Error: invalid duration postfix '%c' in '%.*s', expected 's', 'm', or 'h'\n",
+                      *endptr, (i32)(field.end - (dv + 1)), dv + 1);
+              exit(1);
             }
           } else if ((u8 *)endptr == field.end) {
             // default to seconds
             parsed_default->duration = result * 1000;
           } else {
-            // TODO: better error message on invalid default
+            fprintf(
+                stderr,
+                "Error: invalid duration default value '%.*s', contains unexpected characters\n",
+                (i32)(field.end - (dv + 1)), dv + 1);
             exit(1);
           }
           scan = eq + 1;
