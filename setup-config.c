@@ -173,18 +173,18 @@ internal u32 parse_config(u8 *config, u64 size, struct entry *entries, u8 **firs
 int main(int argc, char *argv[]) {
   (void)argc, (void)argv;
   i32 fd = open("./page.html", O_RDONLY);
-  expect(fd != -1);
+  expect_errno(fd != -1, "Error opening page.html");
   struct stat st;
   {
     i32 ret = fstat(fd, &st);
-    expect(ret != -1);
+    expect_errno(ret != -1, "fstat page.html");
   }
   u64 size = st.st_size;
   u8 *page = mmap(0, size, PROT_READ, MAP_SHARED, fd, 0);
-  expect(page != MAP_FAILED);
+  expect_errno(page != MAP_FAILED, "mmap page.html");
 
   u8 *mem = mmap(0, 128 * 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-  expect(mem != MAP_FAILED);
+  expect_errno(mem != MAP_FAILED, "mmap memory");
   struct entry *config_entries = (struct entry *)mem;
   u32 num_config_entry = 0;
 
@@ -200,11 +200,11 @@ int main(int argc, char *argv[]) {
     struct stat config_st;
     {
       i32 ret = fstat(config_fd, &config_st);
-      expect(ret != -1);
+      expect_errno(ret != -1, "fstat config.txt");
     }
     u64 config_size = config_st.st_size;
     config = mmap(0, config_size, PROT_READ, MAP_SHARED, config_fd, 0);
-    expect(config != MAP_FAILED);
+    expect_errno(config != MAP_FAILED, "mmap config.txt");
 
     num_config_entry = parse_config(config, config_size, config_entries, &first_line_end);
     mem += sizeof(struct entry) * num_config_entry;
@@ -323,7 +323,7 @@ int main(int argc, char *argv[]) {
   }
   i32 out_fd =
       open("./config.txt", O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-  expect(out_fd != -1);
+  expect_errno(out_fd != -1, "Error opening config.txt");
   i64 ret = write(out_fd, out_base, out_current - out_base);
   expect(ret == out_current - out_base);
   close(out_fd);

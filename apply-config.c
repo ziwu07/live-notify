@@ -299,14 +299,14 @@ int main(int argc, char *argv[]) {
   struct stat config_st;
   {
     i32 ret = fstat(config_fd, &config_st);
-    expect(ret != -1);
+    expect_errno(ret != -1, "fstat config.txt");
   }
   u64 config_size = config_st.st_size;
   u8 *config = mmap(0, config_size, PROT_READ, MAP_SHARED, config_fd, 0);
-  expect(config != MAP_FAILED);
+  expect_errno(config != MAP_FAILED, "mmap config.txt");
 
   u8 *mem = mmap(0, 128 * 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-  expect(mem != MAP_FAILED);
+  expect_errno(mem != MAP_FAILED, "mmap memory");
   struct arena arena_ = {.mem = mem, .current = mem, .max = mem + 128 * 4096};
   struct arena *arena = &arena_;
   struct entry *config_entries = (struct entry *)arena->current;
@@ -383,7 +383,7 @@ int main(int argc, char *argv[]) {
 
   i32 out_fd =
       open("./config.bin", O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-  expect(out_fd != -1);
+  expect_errno(out_fd != -1, "Error opening config.bin");
   i32 ret = write(out_fd, begin, (u8 *)string_arena_.current - begin);
   expect(ret == (u8 *)string_arena_.current - begin);
   close(out_fd);

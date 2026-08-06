@@ -456,7 +456,7 @@ internal inline struct session_file restore_session() {
     res.file_size = st.st_size;
     expect(res.file_size == st.st_size);
     u8 *base = mmap(NULL, res.file_size, PROT_READ, MAP_SHARED, fd, 0);
-    expect(base != MAP_FAILED);
+    expect_errno(base != MAP_FAILED, "mmap session.bin");
     close(fd);
     struct session_file_header *header = (struct session_file_header *)base;
     res.base = base;
@@ -511,7 +511,7 @@ int main(int argc, char *argv[]) {
       return 1;
     }
     i32 ret = read(fd, x_api + 10, 37);
-    expect(ret == 37);
+    expect_errno(ret == 37, ".env read size");
     x_api[10 + 37] = 0;
     close(fd);
   }
@@ -538,7 +538,7 @@ int main(int argc, char *argv[]) {
     config_file = push_align(arena, CHANNELS_FILE_MAX);
     i64 ret = read(config_fd, config_file, file_size);
     check_ret_syscall("Failed to read config.bin");
-    expect(ret == file_size);
+    expect_errno(ret == file_size, "read config.bin size");
     config = parse_config(config_file, file_size);
   }
 
@@ -755,12 +755,12 @@ int main(int argc, char *argv[]) {
     }
     struct epoll_event event = {.events = EPOLLIN, .data.u32 = TIMER_RETURN};
     i32 ret = epoll_ctl(epollfd, EPOLL_CTL_ADD, tfd, &event);
-    expect(ret >= 0);
+    expect_errno(ret >= 0, "epoll_ctl ADD timerfd");
     sd_bus_fd = sd_bus_get_fd(bus);
     expect(sd_bus_fd >= 0);
     event.events = 0, event.data.u32 = SD_BUS_RETURN;
     ret = epoll_ctl(epollfd, EPOLL_CTL_ADD, sd_bus_fd, &event);
-    expect(ret >= 0);
+    expect_errno(ret >= 0, "epoll_ctl ADD sd_bus");
   }
 
   struct live_status_ptr *intermediate =
@@ -798,7 +798,7 @@ int main(int argc, char *argv[]) {
       }
       struct epoll_event event = {.events = epoll_flags, .data.u32 = SD_BUS_RETURN};
       i32 ret = epoll_ctl(epollfd, EPOLL_CTL_MOD, sd_bus_fd, &event);
-      expect(ret >= 0);
+      expect_errno(ret >= 0, "epoll_ctl MOD sd_bus");
     }
 
     struct epoll_event events[2] = {{0}, {0}};
