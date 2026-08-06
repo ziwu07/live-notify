@@ -10,11 +10,6 @@ struct ptr_string {
   u8 *end;
 };
 
-struct __attribute__((__packed__)) offset_string {
-  u32 offset;
-  u32 len;
-};
-
 /*
  * file format:
  * header

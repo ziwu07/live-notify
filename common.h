@@ -44,6 +44,19 @@
     }                                                                                              \
   } while (0)
 
+#define expect_errno(expr, msg)                                                                    \
+  do {                                                                                             \
+    if (unlikely(!(expr))) {                                                                       \
+      perror(msg);                                                                                 \
+      exit(1);                                                                                     \
+    }                                                                                              \
+  } while (0)
+
+struct __attribute__((__packed__)) offset_string {
+  u32 offset;
+  u32 len;
+};
+
 struct arena {
   void *mem;
   void *current;

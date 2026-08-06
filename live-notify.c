@@ -5,6 +5,7 @@
 #include "common-config.h"
 #include "common.h"
 #include "jsmn.h"
+#include "session-restore.h"
 #include <curl/curl.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -44,7 +45,7 @@
   {                                                                                                \
     if (unlikely(ret == -1)) {                                                                     \
       perror(msg);                                                                                 \
-      return 1;                                                                                    \
+      exit(1);                                                                                     \
     }                                                                                              \
   }
 
@@ -375,14 +376,12 @@ internal inline struct parsed_config_file parse_config(u8 *config_file, i64 file
   struct parsed_config_file res;
   struct config_file_header *header = (struct config_file_header *)config_file;
   if (unlikely(header->magic != CONFIG_FILE_MAGIC)) {
-    fprintf(stderr, "Error: config.bin has invalid magic — regenerate with apply-config\n");
+    fprintf(stderr, "Error: config.bin has invalid magic, regenerate with apply-config\n");
     exit(1);
   }
   if (unlikely(header->version != 1)) {
-    fprintf(
-        stderr,
-        "Error: config.bin version %d is unsupported (expected 1) — regenerate with apply-config\n",
-        header->version);
+    fprintf(stderr, "Error: config.bin version %d is unsupported, regenerate with apply-config\n",
+            header->version);
     exit(1);
   }
   res.entries = (struct config_file_entry *)(header + 1);
@@ -414,6 +413,71 @@ internal inline struct config_file_entry *bsearch_by_id(struct parsed_config_fil
     return list->entries + low;
   }
   return 0;
+}
+
+internal inline void save_session(struct live_status *current_status, u32 num_current_status) {
+  i32 fd = open("./session.bin", O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  expect_errno(fd != -1, "Error opening session.bin");
+  u32 len =
+      sizeof(struct session_file_header) + num_current_status * sizeof(struct session_file_entry);
+  for (u32 i = 0; i < num_current_status; ++i) {
+    len += current_status[i].id_len;
+  }
+  i32 ret = ftruncate(fd, len);
+  check_ret_syscall("ftruncate on session.bin");
+  u8 *base = mmap(0, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  expect_errno(base != MAP_FAILED, "Memory error");
+  struct session_file_header *header = (struct session_file_header *)base;
+  header->magic = SESSION_FILE_MAGIC;
+  header->version = 1;
+  header->num_entry = num_current_status;
+  struct session_file_entry *entries = (struct session_file_entry *)(header + 1);
+  u8 *string_pool = (u8 *)(entries + num_current_status);
+  u32 str_pool_offset = 0;
+  for (u32 i = 0; i < num_current_status; ++i) {
+    struct session_file_entry *entry = entries + i;
+    struct live_status *cur = current_status + i;
+    entry->id.offset = str_pool_offset;
+    entry->id.len = cur->id_len;
+    memcpy(string_pool + str_pool_offset, cur->id, cur->id_len);
+    str_pool_offset += cur->id_len;
+  }
+}
+
+internal inline struct session_file restore_session() {
+  struct session_file res = {.base = 0};
+  i32 fd = open("./session.bin", O_RDONLY);
+  if (fd != -1) {
+    struct stat st;
+    {
+      i32 ret = fstat(fd, &st);
+      check_ret_syscall("Failed to get session.bin");
+    }
+    res.file_size = st.st_size;
+    expect(res.file_size == st.st_size);
+    u8 *base = mmap(NULL, res.file_size, PROT_READ, MAP_SHARED, fd, 0);
+    expect(base != MAP_FAILED);
+    close(fd);
+    struct session_file_header *header = (struct session_file_header *)base;
+    res.base = base;
+
+    if (unlikely(header->magic != SESSION_FILE_MAGIC)) {
+      fprintf(stderr, "Error: session.bin has invalid magic, remove the file.\n");
+      exit(1);
+    }
+    if (unlikely(header->version != 1)) {
+      fprintf(stderr, "Error: session.bin version %d is unsupported, remove the file.\n",
+              header->version);
+      exit(1);
+    }
+
+    res.num_entry = header->num_entry;
+    struct session_file_entry *entries = (struct session_file_entry *)(header + 1);
+    u8 *str_pool = (u8 *)(entries + res.num_entry);
+    res.entries = entries;
+    res.string_pool = str_pool;
+  }
+  return res;
 }
 
 internal volatile sig_atomic_t quit = 0;
@@ -459,7 +523,7 @@ int main(int argc, char *argv[]) {
   struct parsed_config_file config;
   {
     config_fd = open("./config.bin", O_RDONLY);
-    if (config_fd == -1) {
+    if (unlikely(config_fd == -1)) {
       perror("Error opening config.bin");
       return 1;
     }
@@ -477,6 +541,8 @@ int main(int argc, char *argv[]) {
     expect(ret == file_size);
     config = parse_config(config_file, file_size);
   }
+
+  struct session_file session = restore_session();
 
   c8 pfp_path[PATH_MAX];
   u32 pfp_path_len = 0;
@@ -818,18 +884,37 @@ int main(int argc, char *argv[]) {
       struct live_status *new[NUM_LIVE_MAX];
       u32 num_new = 0;
       {
-        for (u32 i = 0; i < num_current_status; ++i) {
-          struct live_status *cur = current_status + i;
-          u32 found = 0;
-          for (u32 j = 0; j < num_previous_status; ++j) {
-            struct live_status *prev = previous_status + j;
-            if (cur->id_len == prev->id_len && memcmp(cur->id, prev->id, cur->id_len) == 0) {
-              found = 1;
+        if (likely(session.base == 0)) {
+          for (u32 i = 0; i < num_current_status; ++i) {
+            struct live_status *cur = current_status + i;
+            u32 found = 0;
+            for (u32 j = 0; j < num_previous_status; ++j) {
+              struct live_status *prev = previous_status + j;
+              if (cur->id_len == prev->id_len && memcmp(cur->id, prev->id, cur->id_len) == 0) {
+                found = 1;
+              }
+            }
+            if (unlikely(!found)) {
+              new[num_new++] = cur;
             }
           }
-          if (unlikely(!found)) {
-            new[num_new++] = cur;
+        } else {
+          for (u32 i = 0; i < num_current_status; ++i) {
+            struct live_status *cur = current_status + i;
+            u32 found = 0;
+            for (u32 j = 0; j < session.num_entry; ++j) {
+              struct session_file_entry *prev = session.entries + j;
+              if (cur->id_len == prev->id.len &&
+                  memcmp(cur->id, session.string_pool + prev->id.offset, cur->id_len) == 0) {
+                found = 1;
+              }
+            }
+            if (!found) {
+              new[num_new++] = cur;
+            }
           }
+          munmap(session.base, session.file_size);
+          session.base = 0;
         }
       }
 
@@ -838,88 +923,91 @@ int main(int argc, char *argv[]) {
         struct live_status *cur = new[i];
         struct config_file_entry *current_config =
             bsearch_by_id(&config, cur->channel_id, cur->channel_id_len);
-        expect(current_config != 0);
-        i32 open_direct = current_config->open_direct;
-        if (current_config->open_direct == -1) {
-          open_direct = config.defaults->open_direct;
-        }
-        if (open_direct != 1) {
-          i32 duration = current_config->duration;
-          if (current_config->duration == -1) {
-            duration = config.defaults->duration;
+        // TODO: if current_config == 0 then it means that a vtuber in "mentions" is in your config
+        if (current_config != 0) {
+          i32 open_direct = current_config->open_direct;
+          if (current_config->open_direct == -1) {
+            open_direct = config.defaults->open_direct;
           }
-          struct offset_string sound = current_config->sound;
-          if (config.string_pool[sound.offset] == 0) {
-            sound = config.defaults->sound;
-          }
-          c8 *sound_type;
-          if (config.string_pool[sound.offset] != '/') {
-            sound_type = "sound-name";
-          } else {
-            sound_type = "sound-file";
-          }
-          c8 *favicon = cur->link[0] == 0 ? youtube_favicon : twitch_favicon;
-          c8 image_path[PATH_MAX] = "file://";
-          memcpy(image_path + 7, cur->photo_path, cur->photo_path_len);
-          sd_bus_message *msg = 0;
-          i32 ret = sd_bus_call_method(
-              bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
-              "org.freedesktop.Notifications", "Notify", 0, &msg, "susssasa{sv}i", "live-notify", 0,
-              favicon, config.string_pool + current_config->name.offset, cur->title, 2, "default",
-              "default", 4, "category", "s", "im.received", "image-path", "s", image_path,
-              sound_type, "s", config.string_pool + sound.offset, "urgency", "y", 1, duration);
-          expect(ret >= 0);
-          u32 id = 0;
-          sd_bus_message_read_basic(msg, 'u', &id);
-          sd_bus_message_unref(msg);
-          i32 min_idx = 0;
-          for (u32 i = 0; i < NUM_NOTIFICATION_MAX; ++i) {
-            if (notify_list[i].id == 0) {
-              notify_list[i].id = id;
+          if (open_direct != 1) {
+            i32 duration = current_config->duration;
+            if (current_config->duration == -1) {
+              duration = config.defaults->duration;
+            }
+            struct offset_string sound = current_config->sound;
+            if (config.string_pool[sound.offset] == 0) {
+              sound = config.defaults->sound;
+            }
+            c8 *sound_type;
+            if (config.string_pool[sound.offset] != '/') {
+              sound_type = "sound-name";
+            } else {
+              sound_type = "sound-file";
+            }
+            c8 *favicon = cur->link[0] == 0 ? youtube_favicon : twitch_favicon;
+            c8 image_path[PATH_MAX] = "file://";
+            memcpy(image_path + 7, cur->photo_path, cur->photo_path_len);
+            sd_bus_message *msg = 0;
+            i32 ret = sd_bus_call_method(
+                bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                "org.freedesktop.Notifications", "Notify", 0, &msg, "susssasa{sv}i", "live-notify",
+                0, favicon, config.string_pool + current_config->name.offset, cur->title, 2,
+                "default", "default", 4, "category", "s", "im.received", "image-path", "s",
+                image_path, sound_type, "s", config.string_pool + sound.offset, "urgency", "y", 1,
+                duration);
+            expect(ret >= 0);
+            u32 id = 0;
+            sd_bus_message_read_basic(msg, 'u', &id);
+            sd_bus_message_unref(msg);
+            i32 min_idx = 0;
+            for (u32 i = 0; i < NUM_NOTIFICATION_MAX; ++i) {
+              if (notify_list[i].id == 0) {
+                notify_list[i].id = id;
+                if (cur->link[0] == 0) {
+                  memcpy(notify_list[i].link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
+                  expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
+                  memcpy(notify_list[i].link + sizeof(YOUTUBE_LINK) - 1, cur->id, cur->id_len);
+                } else {
+                  expect(cur->link_len <= LINK_MAX_LEN);
+                  memcpy(notify_list[i].link, cur->link, cur->link_len);
+                }
+                min_idx = -1;
+                break;
+              } else if (notify_list[i].id < notify_list[min_idx].id) {
+                min_idx = i;
+              }
+            }
+            if (min_idx != -1) {
+              notify_list[min_idx].id = id;
               if (cur->link[0] == 0) {
-                memcpy(notify_list[i].link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
+                memcpy(notify_list[min_idx].link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
                 expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
-                memcpy(notify_list[i].link + sizeof(YOUTUBE_LINK) - 1, cur->id, cur->id_len);
+                memcpy(notify_list[min_idx].link + sizeof(YOUTUBE_LINK), cur->id, cur->id_len);
               } else {
                 expect(cur->link_len <= LINK_MAX_LEN);
-                memcpy(notify_list[i].link, cur->link, cur->link_len);
+                memcpy(notify_list[min_idx].link, cur->link, cur->link_len);
               }
-              min_idx = -1;
-              break;
-            } else if (notify_list[i].id < notify_list[min_idx].id) {
-              min_idx = i;
             }
-          }
-          if (min_idx != -1) {
-            notify_list[min_idx].id = id;
+          } else {
+            c8 link[LINK_MAX_LEN];
             if (cur->link[0] == 0) {
-              memcpy(notify_list[min_idx].link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
+              memcpy(link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
               expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
-              memcpy(notify_list[min_idx].link + sizeof(YOUTUBE_LINK), cur->id, cur->id_len);
+              memcpy(link + sizeof(YOUTUBE_LINK) - 1, cur->id, cur->id_len);
             } else {
               expect(cur->link_len <= LINK_MAX_LEN);
-              memcpy(notify_list[min_idx].link, cur->link, cur->link_len);
+              memcpy(link, cur->link, cur->link_len);
             }
-          }
-        } else {
-          c8 link[LINK_MAX_LEN];
-          if (cur->link[0] == 0) {
-            memcpy(link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
-            expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
-            memcpy(link + sizeof(YOUTUBE_LINK) - 1, cur->id, cur->id_len);
-          } else {
-            expect(cur->link_len <= LINK_MAX_LEN);
-            memcpy(link, cur->link, cur->link_len);
-          }
-          u64 pid = fork();
-          if (pid == 0) {
-            i32 fd = open("/dev/null", O_WRONLY);
-            if (likely(fd != -1)) {
-              dup2(fd, STDOUT_FILENO);
+            u64 pid = fork();
+            if (pid == 0) {
+              i32 fd = open("/dev/null", O_WRONLY);
+              if (likely(fd != -1)) {
+                dup2(fd, STDOUT_FILENO);
+              }
+              c8 *argv0 = "/usr/bin/brave";
+              c8 *argv[] = {argv0, link, 0};
+              execv(argv0, argv);
             }
-            c8 *argv0 = "/usr/bin/brave";
-            c8 *argv[] = {argv0, link, 0};
-            execv(argv0, argv);
           }
         }
       }
@@ -933,6 +1021,8 @@ int main(int argc, char *argv[]) {
       num_previous_status = num_current_status;
     }
   }
+
+  save_session(current_status, num_current_status);
 
   close(config_fd);
   sd_bus_flush_close_unref(bus);
