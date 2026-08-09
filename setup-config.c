@@ -4,6 +4,7 @@
 #define _GNU_SOURCE
 #include "common-config.h"
 #include "common.h"
+#include "xdg-base-directory.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
@@ -172,8 +173,25 @@ internal u32 parse_config(u8 *config, u64 size, struct entry *entries, u8 **firs
 
 int main(int argc, char *argv[]) {
   (void)argc, (void)argv;
-  i32 fd = open("./page.html", O_RDONLY);
-  expect_errno(fd != -1, "Error opening page.html");
+  c8 config_path[PATH_MAX];
+  get_file_path(config, "config.csv", config_path);
+  c8 web_page_path[PATH_MAX];
+  get_file_path(config, "page.html", web_page_path);
+  i32 fd = open(web_page_path, O_RDONLY);
+  // TODO: directory already exists but file does not
+  if (fd == -1) {
+    if (likely(errno == ENOENT)) {
+      c8 xdg_config_path[PATH_MAX];
+      get_path_xdg_config(xdg_config_path);
+      i32 ret = mkdir(xdg_config_path, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+      expect_errno(ret != -1, "Error creating config directory");
+      // TODO: give instruction on how to get page.html
+      return 0;
+    } else {
+      perror("Error opening page.html");
+      return 1;
+    }
+  }
   struct stat st;
   {
     i32 ret = fstat(fd, &st);
@@ -192,7 +210,7 @@ int main(int argc, char *argv[]) {
   struct entry **config_entry_sort_order = 0;
   u8 *config;
   u8 *first_line_end;
-  i32 config_fd = open("./config.txt", O_RDONLY);
+  i32 config_fd = open(config_path, O_RDONLY);
   if (config_fd == -1) {
     expect(errno == ENOENT);
     config_exists = 0;
@@ -200,11 +218,11 @@ int main(int argc, char *argv[]) {
     struct stat config_st;
     {
       i32 ret = fstat(config_fd, &config_st);
-      expect_errno(ret != -1, "fstat config.txt");
+      expect_errno(ret != -1, "fstat config.csv");
     }
     u64 config_size = config_st.st_size;
     config = mmap(0, config_size, PROT_READ, MAP_SHARED, config_fd, 0);
-    expect_errno(config != MAP_FAILED, "mmap config.txt");
+    expect_errno(config != MAP_FAILED, "mmap config.csv");
 
     num_config_entry = parse_config(config, config_size, config_entries, &first_line_end);
     mem += sizeof(struct entry) * num_config_entry;
@@ -322,8 +340,8 @@ int main(int argc, char *argv[]) {
     }
   }
   i32 out_fd =
-      open("./config.txt", O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-  expect_errno(out_fd != -1, "Error opening config.txt");
+      open(config_path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  expect_errno(out_fd != -1, "Error opening config.csv");
   i64 ret = write(out_fd, out_base, out_current - out_base);
   expect(ret == out_current - out_base);
   close(out_fd);

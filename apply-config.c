@@ -4,6 +4,7 @@
 #define _GNU_SOURCE
 #include "common-config.h"
 #include "common.h"
+#include "xdg-base-directory.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
@@ -287,23 +288,27 @@ internal inline struct offset_string cpy_field(struct arena *arena, struct ptr_s
 
 int main(int argc, char *argv[]) {
   (void)argc, (void)argv;
-  i32 config_fd = open("./config.txt", O_RDONLY);
+  c8 config_path[PATH_MAX];
+  get_file_path(config, "config.csv", config_path);
+  c8 config_out_path[PATH_MAX];
+  get_file_path(state, "config.bin", config_out_path);
+  i32 config_fd = open(config_path, O_RDONLY);
   if (config_fd == -1) {
     if (errno == ENOENT) {
-      fprintf(stderr, "Error: config.txt not found, run setup-config first\n");
+      fprintf(stderr, "Error: config.csv not found, run setup-config first\n");
       return 1;
     }
-    perror("Error opening config.txt");
+    perror("Error opening config.csv");
     return 1;
   }
   struct stat config_st;
   {
     i32 ret = fstat(config_fd, &config_st);
-    expect_errno(ret != -1, "fstat config.txt");
+    expect_errno(ret != -1, "fstat config.csv");
   }
   u64 config_size = config_st.st_size;
   u8 *config = mmap(0, config_size, PROT_READ, MAP_SHARED, config_fd, 0);
-  expect_errno(config != MAP_FAILED, "mmap config.txt");
+  expect_errno(config != MAP_FAILED, "mmap config.csv");
 
   u8 *mem = mmap(0, 128 * 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
   expect_errno(mem != MAP_FAILED, "mmap memory");
@@ -316,7 +321,7 @@ int main(int argc, char *argv[]) {
   u32 num_config_entry = parse_config(config, config_size, arena, &parsed_defaults, &sound_str);
 
   if (unlikely(num_config_entry == 0)) {
-    fprintf(stderr, "Error: no entries found in config.txt\n");
+    fprintf(stderr, "Error: no entries found in config.csv\n");
     return 1;
   }
 
@@ -382,8 +387,32 @@ int main(int argc, char *argv[]) {
   header->string_pool_len = (u8 *)string_arena_.current - (u8 *)string_arena_.mem;
 
   i32 out_fd =
-      open("./config.bin", O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-  expect_errno(out_fd != -1, "Error opening config.bin");
+      open(config_out_path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  if (out_fd == -1) {
+    if (likely(errno == ENOENT)) {
+      c8 directory_path[PATH_MAX];
+      get_path_xdg_state(directory_path);
+      i32 ret = access(directory_path, R_OK | W_OK | X_OK);
+      if (ret == -1) {
+        if (errno == ENOENT) {
+          i32 ret = mkdir(directory_path, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+          expect_errno(ret != -1, "Error creating state directory");
+          out_fd = open(config_out_path, O_WRONLY | O_CREAT | O_TRUNC,
+                        S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+          expect_errno(out_fd != -1, "Error opening config.bin");
+        } else {
+          perror("Error opening state directory");
+          return 1;
+        }
+      } else {
+        fprintf(stderr, "WHAT?????\n");
+        return 1;
+      }
+    } else {
+      perror("Error opening config.bin");
+      return 1;
+    }
+  }
   i32 ret = write(out_fd, begin, (u8 *)string_arena_.current - begin);
   expect(ret == (u8 *)string_arena_.current - begin);
   close(out_fd);

@@ -4,10 +4,3 @@
 live-notify
 setup-config
 apply-config
-
-.env
-config.txt
-config.bin
-page.html
-session.bin
-pfp/

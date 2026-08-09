@@ -6,6 +6,7 @@
 #include "common.h"
 #include "jsmn.h"
 #include "session-restore.h"
+#include "xdg-base-directory.h"
 #include <curl/curl.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -109,7 +110,7 @@ struct parsed_config_file {
   u32 num_entry;
 };
 
-internal u32 basename_start(u8 *buf, struct buff_string str) {
+internal inline u32 basename_start(u8 *buf, struct buff_string str) {
   for (u32 i = str.end - 1; i >= str.start; --i) {
     if (buf[i] == '/') {
       return i + 1;
@@ -124,8 +125,7 @@ internal inline void stringcpy(const u8 *const restrict buf, struct buff_string 
   dst[str.end - str.start] = 0;
 }
 
-internal struct live_status *parse_json(struct arena *arena, c8 *pfp_path, u32 pfp_path_len,
-                                        struct api_data *data, void *json_buf,
+internal struct live_status *parse_json(struct arena *arena, struct api_data *data, void *json_buf,
                                         struct live_status_ptr *intermediate, u32 *num_live_out) {
   jsmn_parser parser;
   jsmn_init(&parser);
@@ -296,10 +296,9 @@ internal struct live_status *parse_json(struct arena *arena, c8 *pfp_path, u32 p
 
     u32 start = basename_start(buf, status[i].photo_url);
     struct buff_string pfp_id = {.start = start, .end = status[i].photo_url.end};
-    live[i].photo_path_len = pfp_path_len + pfp_id.end - pfp_id.start + 1;
+    live[i].photo_path_len = pfp_id.end - pfp_id.start + 1;
     live[i].photo_path = push(arena, live[i].photo_path_len);
-    memcpy(live[i].photo_path, pfp_path, pfp_path_len);
-    stringcpy(buf, pfp_id, live[i].photo_path + pfp_path_len);
+    stringcpy(buf, pfp_id, live[i].photo_path);
   }
   *num_live_out = num_live;
 
@@ -416,7 +415,10 @@ internal inline struct config_file_entry *bsearch_by_id(struct parsed_config_fil
 }
 
 internal inline void save_session(struct live_status *current_status, u32 num_current_status) {
-  i32 fd = open("./session.bin", O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  c8 session_file_path[PATH_MAX];
+  get_file_path(state, "session.bin", session_file_path);
+  i32 fd =
+      open(session_file_path, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
   expect_errno(fd != -1, "Error opening session.bin");
   u32 len =
       sizeof(struct session_file_header) + num_current_status * sizeof(struct session_file_entry);
@@ -445,8 +447,10 @@ internal inline void save_session(struct live_status *current_status, u32 num_cu
 }
 
 internal inline struct session_file restore_session() {
+  c8 session_file_path[PATH_MAX];
+  get_file_path(state, "session.bin", session_file_path);
   struct session_file res = {.base = 0};
-  i32 fd = open("./session.bin", O_RDONLY);
+  i32 fd = open(session_file_path, O_RDONLY);
   if (fd != -1) {
     struct stat st;
     {
@@ -505,13 +509,15 @@ int main(int argc, char *argv[]) {
   // api key
   c8 x_api[10 + 37 + 1] = "X-APIKEY: ";
   {
-    i32 fd = open(".env", O_RDONLY);
+    c8 api_key_path[PATH_MAX];
+    get_file_path(config, "api-key.txt", api_key_path);
+    i32 fd = open(api_key_path, O_RDONLY);
     if (fd == -1) {
-      fprintf(stderr, "Error: .env not found\n");
+      fprintf(stderr, "Error: api-key.txt not found\n");
       return 1;
     }
     i32 ret = read(fd, x_api + 10, 37);
-    expect_errno(ret == 37, ".env read size");
+    expect_errno(ret == 37, "api-key.txt read size");
     x_api[10 + 37] = 0;
     close(fd);
   }
@@ -522,7 +528,9 @@ int main(int argc, char *argv[]) {
   u8 *config_file;
   struct parsed_config_file config;
   {
-    config_fd = open("./config.bin", O_RDONLY);
+    c8 config_path[PATH_MAX];
+    get_file_path(state, "config.bin", config_path);
+    config_fd = open(config_path, O_RDONLY);
     if (unlikely(config_fd == -1)) {
       perror("Error opening config.bin");
       return 1;
@@ -546,15 +554,13 @@ int main(int argc, char *argv[]) {
 
   c8 pfp_path[PATH_MAX];
   u32 pfp_path_len = 0;
+  // TODO: here
   {
-    c8 *cwd_ret = getcwd(pfp_path, PATH_MAX - sizeof(PFP_REL));
-    if (unlikely(!cwd_ret)) {
-      perror("Failed to get working directory.");
-      return 1;
+    pfp_path_len = get_path_xdg_cache(pfp_path);
+    for (u32 j = 0; j < sizeof("/pfp/"); ++j) {
+      pfp_path[pfp_path_len++] = "/pfp/"[j];
     }
-    pfp_path_len = strlen(pfp_path);
-    memcpy(pfp_path + strlen(pfp_path), PFP_REL, sizeof(PFP_REL));
-    pfp_path_len += sizeof(PFP_REL) - 1;
+    pfp_path_len--;
   }
 
   {
@@ -562,11 +568,18 @@ int main(int argc, char *argv[]) {
     if (unlikely(ret == -1)) {
       if (likely(errno == ENOENT)) {
         ret = mkdir(pfp_path, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
-        check_ret_syscall("Failed to create directory ./pfp");
-        ret = access("./pfp/", R_OK | W_OK | X_OK);
-        check_ret_syscall("Failed to access ./pfp");
+        if (ret == -1 && errno == ENOENT) {
+          c8 cache_path[PATH_MAX];
+          get_path_xdg_cache(cache_path);
+          ret = mkdir(cache_path, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+          check_ret_syscall("Failed to create directory in cache directory");
+          ret = mkdir(pfp_path, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+        }
+        check_ret_syscall("Failed to create directory /pfp/");
+        ret = access(pfp_path, R_OK | W_OK | X_OK);
+        check_ret_syscall("WHAT???");
       } else {
-        perror("Failed to access file in ./pfp/");
+        perror("Failed to access file in /pfp/");
         return 1;
       }
     }
@@ -663,7 +676,7 @@ int main(int argc, char *argv[]) {
             check_CURLcode();
             fclose(f);
           } else {
-            perror("Failed to access file in ./pfp/");
+            perror("Failed to access file in /pfp/");
             return 1;
           }
         }
@@ -688,7 +701,7 @@ int main(int argc, char *argv[]) {
             check_CURLcode();
             fclose(f);
           } else {
-            perror("Failed to access file in ./pfp/");
+            perror("Failed to access file in /pfp/");
             return 1;
           }
         }
@@ -849,23 +862,27 @@ int main(int argc, char *argv[]) {
         reset_arena(current_arena);
         memset(json_buf, 0, JSON_BUF_MAX);
         memset(intermediate, 0, NUM_LIVE_MAX * sizeof(struct live_status_ptr));
-        current_status = parse_json(current_arena, pfp_path, pfp_path_len, &data, json_buf,
-                                    intermediate, &num_current_status);
+        current_status =
+            parse_json(current_arena, &data, json_buf, intermediate, &num_current_status);
         if (unlikely(current_status == 0)) {
           return 1;
         }
       }
 
       for (u32 i = 0; i < num_current_status; ++i) {
-        i32 ret = access((c8 *)current_status[i].photo_path, R_OK);
+        c8 photo_path[PATH_MAX];
+        memcpy(photo_path, pfp_path, pfp_path_len);
+        memcpy(photo_path + pfp_path_len, current_status[i].photo_path,
+               current_status[i].photo_path_len);
+        i32 ret = access(photo_path, R_OK);
         if (unlikely(ret == -1)) {
           if (likely(errno == ENOENT)) {
             // download it
             curlcode = curl_easy_setopt(curl_download, CURLOPT_URL, current_status[i].photo_url);
             check_CURLcode();
-            FILE *f = fopen((c8 *)current_status[i].photo_path, "wb");
+            FILE *f = fopen(photo_path, "wb");
             if (unlikely(f == 0)) {
-              printf("%s\n", current_status[i].photo_path);
+              printf("%s\n", photo_path);
               perror("Failed to write file");
               return 1;
             }
@@ -875,7 +892,7 @@ int main(int argc, char *argv[]) {
             check_CURLcode();
             fclose(f);
           } else {
-            perror("Failed to access file in ./pfp/");
+            perror("Failed to access file in /pfp/");
             return 1;
           }
         }
@@ -945,15 +962,16 @@ int main(int argc, char *argv[]) {
               sound_type = "sound-file";
             }
             c8 *favicon = cur->link[0] == 0 ? youtube_favicon : twitch_favicon;
-            c8 image_path[PATH_MAX] = "file://";
-            memcpy(image_path + 7, cur->photo_path, cur->photo_path_len);
+            c8 image_uri[7 + PATH_MAX] = "file://";
+            memcpy(image_uri + 7, pfp_path, pfp_path_len);
+            memcpy(image_uri + 7 + pfp_path_len, cur->photo_path, cur->photo_path_len);
             sd_bus_message *msg = 0;
             i32 ret = sd_bus_call_method(
                 bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
                 "org.freedesktop.Notifications", "Notify", 0, &msg, "susssasa{sv}i", "live-notify",
                 0, favicon, config.string_pool + current_config->name.offset, cur->title, 2,
                 "default", "default", 4, "category", "s", "im.received", "image-path", "s",
-                image_path, sound_type, "s", config.string_pool + sound.offset, "urgency", "y", 1,
+                image_uri, sound_type, "s", config.string_pool + sound.offset, "urgency", "y", 1,
                 duration);
             expect(ret >= 0);
             u32 id = 0;

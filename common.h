@@ -1,6 +1,7 @@
 #ifndef COMMON_H_
 #define COMMON_H_
 
+#include <linux/limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,6 +15,7 @@
 #define i64 int64_t
 #define internal static
 
+#define PROJECT_PATH_NAME "/live-notify"
 #define API_DATA_SIZE (8 * 1024 * 1024)
 #define LINK_MAX_LEN (128 - 4)
 #define ALLOC_MEM (64 * 1024 * 1024)
@@ -87,7 +89,7 @@ internal inline void *push(struct arena *arena, u64 size) {
 // void restore_point(struct arena *arena, void *point) { arena->current =
 // point; }
 
-void reset_arena(struct arena *arena) {
+internal inline void reset_arena(struct arena *arena) {
   arena->current = arena->mem;
 }
 

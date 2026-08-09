@@ -1,5 +1,6 @@
 add msg to expect
-read man madvise
-use xdg file paths
-save and restore old existing list (dump arena and load back arena?)
-musl?
+interval in config
+set time ranges in local time where:
+  no notifications? (still open_direct)
+  no audiable notifications? (still dbus notify but with no sound)
+  nothing at all?
