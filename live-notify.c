@@ -345,6 +345,7 @@ internal i32 action_invoked(sd_bus_message *m, void *userdata, sd_bus_error *ret
       i32 fd = open("/dev/null", O_WRONLY);
       if (likely(fd != -1)) {
         dup2(fd, STDOUT_FILENO);
+        dup2(fd, STDERR_FILENO);
       }
       c8 *argv0 = "/usr/bin/brave";
       c8 *argv[] = {argv0, (c8 *)notify_list[idx].link, 0};
@@ -1021,6 +1022,7 @@ int main(int argc, char *argv[]) {
               i32 fd = open("/dev/null", O_WRONLY);
               if (likely(fd != -1)) {
                 dup2(fd, STDOUT_FILENO);
+                dup2(fd, STDERR_FILENO);
               }
               c8 *argv0 = "/usr/bin/brave";
               c8 *argv[] = {argv0, link, 0};
