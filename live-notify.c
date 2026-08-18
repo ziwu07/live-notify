@@ -21,7 +21,7 @@
 #include <systemd/sd-bus.h>
 #include <unistd.h>
 
-#define check_CURLcode()                                                                           \
+#define check_CURLcode_init()                                                                      \
   {                                                                                                \
     if (unlikely(curlcode != CURLE_OK)) {                                                          \
       curl_easy_cleanup(curl);                                                                     \
@@ -31,7 +31,26 @@
     }                                                                                              \
   }
 
-#define check_CURLUcode()                                                                          \
+#define check_CURLcode_favicon()                                                                   \
+  {                                                                                                \
+    if (unlikely(curlcode != CURLE_OK)) {                                                          \
+      curl_easy_cleanup(curl_download);                                                            \
+      curl_easy_cleanup(curl);                                                                     \
+      curl_global_cleanup();                                                                       \
+      fprintf(stderr, "Error at %u: %s\n", __LINE__, curl_easy_strerror(curlcode));                \
+      return 1;                                                                                    \
+    }                                                                                              \
+  }
+
+#define check_CURLcode_full()                                                                      \
+  {                                                                                                \
+    if (unlikely(curlcode != CURLE_OK)) {                                                          \
+      fprintf(stderr, "Error at %u: %s\n", __LINE__, curl_easy_strerror(curlcode));                \
+      goto cleanup_error;                                                                          \
+    }                                                                                              \
+  }
+
+#define check_CURLUcode_early()                                                                    \
   {                                                                                                \
     if (unlikely(curlucode != CURLUE_OK)) {                                                        \
       curl_url_cleanup(url);                                                                       \
@@ -39,6 +58,14 @@
       curl_global_cleanup();                                                                       \
       fprintf(stderr, "Error at %u: %u\n", __LINE__, curlucode);                                   \
       return 1;                                                                                    \
+    }                                                                                              \
+  }
+
+#define check_CURLUcode_full()                                                                     \
+  {                                                                                                \
+    if (unlikely(curlucode != CURLUE_OK)) {                                                        \
+      fprintf(stderr, "Error at %u: %u\n", __LINE__, curlucode);                                   \
+      goto cleanup_error;                                                                          \
     }                                                                                              \
   }
 
@@ -612,13 +639,14 @@ int main(int argc, char *argv[]) {
   }
 
   // curl
+  sd_bus *bus = 0;
   CURLcode curlcode;
   CURL *curl;
   CURL *curl_download;
   CURLU *url;
   CURLUcode curlucode;
   c8 curl_error[CURL_ERROR_SIZE];
-  struct curl_slist *headers;
+  struct curl_slist *headers = 0;
   struct api_data data = {0};
   c8 youtube_favicon[PATH_MAX];
   c8 twitch_favicon[PATH_MAX];
@@ -635,19 +663,19 @@ int main(int argc, char *argv[]) {
       return 1;
     }
     curlcode = curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
-    check_CURLcode();
+    check_CURLcode_init();
     curlcode = curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
-    check_CURLcode();
+    check_CURLcode_init();
     curlcode = curl_easy_setopt(curl, CURLOPT_USE_SSL, CURLUSESSL_ALL);
-    check_CURLcode();
+    check_CURLcode_init();
     curlcode = curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
-    check_CURLcode();
+    check_CURLcode_init();
     curlcode = curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
-    check_CURLcode();
+    check_CURLcode_init();
     curlcode = curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    check_CURLcode();
+    check_CURLcode_init();
     curlcode = curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_error);
-    check_CURLcode();
+    check_CURLcode_init();
 
     curl_download = curl_easy_duphandle(curl);
     if (unlikely(curl_download == 0)) {
@@ -664,17 +692,20 @@ int main(int argc, char *argv[]) {
         if (unlikely(ret == -1)) {
           if (likely(errno == ENOENT)) {
             curlcode = curl_easy_setopt(curl_download, CURLOPT_URL, YOUTUBE_FAVICON_URL);
-            check_CURLcode();
+            check_CURLcode_favicon();
             FILE *f = fopen(youtube_favicon, "wb");
             if (unlikely(f == 0)) {
               printf("%s\n", youtube_favicon);
               perror("Failed to write file");
+              curl_easy_cleanup(curl_download);
+              curl_easy_cleanup(curl);
+              curl_global_cleanup();
               return 1;
             }
             curlcode = curl_easy_setopt(curl_download, CURLOPT_WRITEDATA, f);
-            check_CURLcode();
+            check_CURLcode_favicon();
             curlcode = curl_easy_perform(curl_download);
-            check_CURLcode();
+            check_CURLcode_favicon();
             fclose(f);
           } else {
             perror("Failed to access file in /pfp/");
@@ -689,17 +720,20 @@ int main(int argc, char *argv[]) {
         if (unlikely(ret == -1)) {
           if (likely(errno == ENOENT)) {
             curlcode = curl_easy_setopt(curl_download, CURLOPT_URL, TWITCH_FAVICON_URL);
-            check_CURLcode();
+            check_CURLcode_favicon();
             FILE *f = fopen(twitch_favicon, "wb");
             if (unlikely(f == 0)) {
               printf("%s\n", twitch_favicon);
               perror("Failed to write file");
+              curl_easy_cleanup(curl_download);
+              curl_easy_cleanup(curl);
+              curl_global_cleanup();
               return 1;
             }
             curlcode = curl_easy_setopt(curl_download, CURLOPT_WRITEDATA, f);
-            check_CURLcode();
+            check_CURLcode_favicon();
             curlcode = curl_easy_perform(curl_download);
-            check_CURLcode();
+            check_CURLcode_favicon();
             fclose(f);
           } else {
             perror("Failed to access file in /pfp/");
@@ -711,33 +745,33 @@ int main(int argc, char *argv[]) {
 
     url = curl_url();
     curlucode = curl_url_set(url, CURLUPART_URL, "https://holodex.net/api/v2/users/live", 0);
-    check_CURLUcode();
+    check_CURLUcode_early();
     curlucode = curl_url_set(url, CURLUPART_QUERY, config.query_str, 0);
-    check_CURLUcode();
+    check_CURLUcode_early();
     curlcode = curl_easy_setopt(curl, CURLOPT_CURLU, url);
-    check_CURLcode();
+    check_CURLcode_full();
 
     headers = curl_slist_append(NULL, x_api);
     if (unlikely(!headers)) {
       curl_url_cleanup(url);
+      curl_easy_cleanup(curl_download);
       curl_easy_cleanup(curl);
       curl_global_cleanup();
       return 1;
     }
     curlcode = curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    check_CURLcode();
+    check_CURLcode_full();
 
     curlcode = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, (curl_write_callback)write_callback);
-    check_CURLcode();
+    check_CURLcode_full();
 
     data.buf = push_align(arena, API_DATA_SIZE);
     data.size = 0;
     curlcode = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &data);
-    check_CURLcode();
+    check_CURLcode_full();
   }
 
   struct notification *notify_list;
-  sd_bus *bus = 0;
   {
     notify_list = push_align(arena, NUM_NOTIFICATION_MAX * sizeof(struct notification));
     memset(notify_list, 0, NUM_NOTIFICATION_MAX * sizeof(struct notification));
@@ -765,6 +799,10 @@ int main(int argc, char *argv[]) {
     epollfd = epoll_create(1);
     if (unlikely(epollfd == -1)) {
       perror("Failed to create epoll instance");
+      curl_url_cleanup(url);
+      curl_easy_cleanup(curl_download);
+      curl_easy_cleanup(curl);
+      curl_global_cleanup();
       return 1;
     }
     struct epoll_event event = {.events = EPOLLIN, .data.u32 = TIMER_RETURN};
@@ -828,7 +866,7 @@ int main(int argc, char *argv[]) {
       {
         u64 r = read(tfd, &timer_out, 8);
         if (r != 8) {
-          return 1;
+          goto cleanup_error;
         }
       }
 
@@ -847,7 +885,7 @@ int main(int argc, char *argv[]) {
           last_mtime = new_time;
           config = parse_config(config_file, st.st_size);
           curlucode = curl_url_set(url, CURLUPART_QUERY, config.query_str, 0);
-          check_CURLUcode();
+          check_CURLUcode_full();
         }
       }
 
@@ -874,7 +912,7 @@ int main(int argc, char *argv[]) {
         current_status =
             parse_json(current_arena, &data, json_buf, intermediate, &num_current_status);
         if (unlikely(current_status == 0)) {
-          return 1;
+          goto cleanup_error;
         }
       }
 
@@ -888,21 +926,21 @@ int main(int argc, char *argv[]) {
           if (likely(errno == ENOENT)) {
             // download it
             curlcode = curl_easy_setopt(curl_download, CURLOPT_URL, current_status[i].photo_url);
-            check_CURLcode();
+            check_CURLcode_full();
             FILE *f = fopen(photo_path, "wb");
             if (unlikely(f == 0)) {
               printf("%s\n", photo_path);
               perror("Failed to write file");
-              return 1;
+              goto cleanup_error;
             }
             curlcode = curl_easy_setopt(curl_download, CURLOPT_WRITEDATA, f);
-            check_CURLcode();
+            check_CURLcode_full();
             curlcode = curl_easy_perform(curl_download);
-            check_CURLcode();
+            check_CURLcode_full();
             fclose(f);
           } else {
             perror("Failed to access file in /pfp/");
-            return 1;
+            goto cleanup_error;
           }
         }
       }
