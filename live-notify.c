@@ -26,7 +26,7 @@
     if (unlikely(curlcode != CURLE_OK)) {                                                          \
       curl_easy_cleanup(curl);                                                                     \
       curl_global_cleanup();                                                                       \
-      fprintf(stderr, "Error at %u: %u\n", __LINE__, curlcode);                                    \
+      fprintf(stderr, "Error at %u: %s\n", __LINE__, curl_easy_strerror(curlcode));                \
       return 1;                                                                                    \
     }                                                                                              \
   }
@@ -855,7 +855,15 @@ int main(int argc, char *argv[]) {
         data.size = 0;
         memset(data.buf, 0, API_DATA_SIZE);
         curlcode = curl_easy_perform(curl);
-        check_CURLcode();
+        if (unlikely(curlcode != CURLE_OK)) {
+          if (curlcode == CURLE_OPERATION_TIMEDOUT || curlcode == CURLE_SEND_ERROR ||
+              curlcode == CURLE_RECV_ERROR) {
+            fprintf(stderr, "Network error (retry): %s\n", curl_easy_strerror(curlcode));
+            continue;
+          }
+          fprintf(stderr, "Error at %u: %s\n", __LINE__, curl_easy_strerror(curlcode));
+          goto cleanup_error;
+        }
       }
 
       // current_status and num_current_status are not valid before this
@@ -1052,4 +1060,14 @@ int main(int argc, char *argv[]) {
   curl_easy_cleanup(curl_download);
   curl_global_cleanup();
   return 0;
+
+cleanup_error:
+  close(config_fd);
+  sd_bus_flush_close_unref(bus);
+  curl_slist_free_all(headers);
+  curl_url_cleanup(url);
+  curl_easy_cleanup(curl);
+  curl_easy_cleanup(curl_download);
+  curl_global_cleanup();
+  return 1;
 }
