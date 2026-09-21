@@ -25,6 +25,7 @@
 #define NUM_NOTIFICATION_MAX (NUM_LIVE_MAX * 2)
 #define PFP_REL "/pfp/"
 #define DELAY_MINUTE 3
+#define NOTIFICATION_DELAY_SECOND 1
 #define YOUTUBE_FAVICON_URL                                                                        \
   "https://www.gstatic.com/youtube/img/branding/favicon/"                                          \
   "favicon_144x144_v2.png"
@@ -34,6 +35,7 @@
 #define YOUTUBE_LINK "https://www.youtube.com/watch?v="
 #define TIMER_RETURN 1
 #define SD_BUS_RETURN 2
+#define DELAY_RETURN 3
 
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)

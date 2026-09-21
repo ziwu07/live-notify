@@ -1,6 +1,4 @@
 add msg to expect
-interval in config
-add delay between each notifications
 set time ranges in local time where:
   no notifications? (still open_direct)
   no audiable notifications? (still dbus notify but with no sound)

@@ -364,9 +364,7 @@ internal i32 action_invoked(sd_bus_message *m, void *userdata, sd_bus_error *ret
       break;
     }
   }
-  if (unlikely(idx == -1)) {
-    printf("Warning: Notification data gone\n");
-  } else {
+  if (idx != -1) {
     u64 pid = fork();
     if (pid == 0) {
       i32 fd = open("/dev/null", O_WRONLY);
@@ -512,6 +510,113 @@ internal inline struct session_file restore_session() {
   return res;
 }
 
+struct notify_state {
+  struct live_status **new;          // persistent ptr
+  struct parsed_config_file *config; // persistent
+  c8 *youtube_favicon;               // persistent
+  c8 *twitch_favicon;                // persistent
+  c8 *pfp_path;                      // persistent
+  sd_bus *bus;                       // persistent
+  struct notification *notify_list;  // persistent
+  u32 i;
+  u32 pfp_path_len; // persistent
+  u32 num_new;
+};
+
+internal void notify(struct notify_state *state) {
+  struct live_status *cur = state->new[state->i];
+  struct config_file_entry *current_config =
+      bsearch_by_id(state->config, cur->channel_id, cur->channel_id_len);
+  // TODO: if current_config == 0 then it means that a vtuber in "mentions" is in your config
+  if (current_config != 0) {
+    i32 open_direct = current_config->open_direct;
+    if (current_config->open_direct == -1) {
+      open_direct = state->config->defaults->open_direct;
+    }
+    if (open_direct != 1) {
+      i32 duration = current_config->duration;
+      if (current_config->duration == -1) {
+        duration = state->config->defaults->duration;
+      }
+      struct offset_string sound = current_config->sound;
+      if (state->config->string_pool[sound.offset] == 0) {
+        sound = state->config->defaults->sound;
+      }
+      c8 *sound_type;
+      if (state->config->string_pool[sound.offset] != '/') {
+        sound_type = "sound-name";
+      } else {
+        sound_type = "sound-file";
+      }
+      c8 *favicon = cur->link[0] == 0 ? state->youtube_favicon : state->twitch_favicon;
+      c8 image_uri[7 + PATH_MAX] = "file://";
+      memcpy(image_uri + 7, state->pfp_path, state->pfp_path_len);
+      memcpy(image_uri + 7 + state->pfp_path_len, cur->photo_path, cur->photo_path_len);
+      sd_bus_message *msg = 0;
+      i32 ret = sd_bus_call_method(
+          state->bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+          "org.freedesktop.Notifications", "Notify", 0, &msg, "susssasa{sv}i", "live-notify", 0,
+          favicon, state->config->string_pool + current_config->name.offset, cur->title, 2,
+          "default", "default", 4, "category", "s", "im.received", "image-path", "s", image_uri,
+          sound_type, "s", state->config->string_pool + sound.offset, "urgency", "y", 1, duration);
+      expect(ret >= 0);
+      u32 id = 0;
+      sd_bus_message_read_basic(msg, 'u', &id);
+      sd_bus_message_unref(msg);
+      i32 min_idx = 0;
+      for (u32 i = 0; i < NUM_NOTIFICATION_MAX; ++i) {
+        if (state->notify_list[i].id == 0) {
+          state->notify_list[i].id = id;
+          if (cur->link[0] == 0) {
+            memcpy(state->notify_list[i].link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
+            expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
+            memcpy(state->notify_list[i].link + sizeof(YOUTUBE_LINK) - 1, cur->id, cur->id_len);
+          } else {
+            expect(cur->link_len <= LINK_MAX_LEN);
+            memcpy(state->notify_list[i].link, cur->link, cur->link_len);
+          }
+          min_idx = -1;
+          break;
+        } else if (state->notify_list[i].id < state->notify_list[min_idx].id) {
+          min_idx = i;
+        }
+      }
+      if (min_idx != -1) {
+        state->notify_list[min_idx].id = id;
+        if (cur->link[0] == 0) {
+          memcpy(state->notify_list[min_idx].link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
+          expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
+          memcpy(state->notify_list[min_idx].link + sizeof(YOUTUBE_LINK), cur->id, cur->id_len);
+        } else {
+          expect(cur->link_len <= LINK_MAX_LEN);
+          memcpy(state->notify_list[min_idx].link, cur->link, cur->link_len);
+        }
+      }
+    } else {
+      c8 link[LINK_MAX_LEN];
+      if (cur->link[0] == 0) {
+        memcpy(link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
+        expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
+        memcpy(link + sizeof(YOUTUBE_LINK) - 1, cur->id, cur->id_len);
+      } else {
+        expect(cur->link_len <= LINK_MAX_LEN);
+        memcpy(link, cur->link, cur->link_len);
+      }
+      u64 pid = fork();
+      if (pid == 0) {
+        i32 fd = open("/dev/null", O_WRONLY);
+        if (likely(fd != -1)) {
+          dup2(fd, STDOUT_FILENO);
+          dup2(fd, STDERR_FILENO);
+        }
+        c8 *argv0 = "/usr/bin/brave";
+        c8 *argv[] = {argv0, link, 0};
+        execv(argv0, argv);
+      }
+    }
+  }
+}
+
 internal volatile sig_atomic_t quit = 0;
 
 internal void signal_handler(i32 signal) {
@@ -635,6 +740,24 @@ int main(int argc, char *argv[]) {
     its.it_interval.tv_nsec = 0;
 
     ret = timerfd_settime(tfd, TFD_TIMER_ABSTIME, &its, 0);
+    check_ret_syscall("Failed to set timer");
+  }
+
+  i32 delay_tfd;
+  {
+    delay_tfd = timerfd_create(CLOCK_REALTIME, 0);
+    if (unlikely(delay_tfd == -1)) {
+      perror("Failed to create timer");
+      return 1;
+    }
+    struct itimerspec its;
+    its.it_value.tv_sec = 0;
+    its.it_value.tv_nsec = 0;
+    its.it_interval.tv_sec = NOTIFICATION_DELAY_SECOND;
+    its.it_interval.tv_nsec = 0;
+
+    i32 ret;
+    ret = timerfd_settime(delay_tfd, 0, &its, 0);
     check_ret_syscall("Failed to set timer");
   }
 
@@ -808,6 +931,9 @@ int main(int argc, char *argv[]) {
     struct epoll_event event = {.events = EPOLLIN, .data.u32 = TIMER_RETURN};
     i32 ret = epoll_ctl(epollfd, EPOLL_CTL_ADD, tfd, &event);
     expect_errno(ret >= 0, "epoll_ctl ADD timerfd");
+    event.data.u32 = DELAY_RETURN;
+    ret = epoll_ctl(epollfd, EPOLL_CTL_ADD, delay_tfd, &event);
+    expect_errno(ret >= 0, "epoll_ctl ADD delay timerfd");
     sd_bus_fd = sd_bus_get_fd(bus);
     expect(sd_bus_fd >= 0);
     event.events = 0, event.data.u32 = SD_BUS_RETURN;
@@ -818,6 +944,24 @@ int main(int argc, char *argv[]) {
   struct live_status_ptr *intermediate =
       push_align(arena, NUM_LIVE_MAX * sizeof(struct live_status_ptr));
   void *json_buf = push_align(arena, JSON_BUF_MAX);
+
+  u64 timer_out;
+  struct live_status *current_status = 0;
+  u32 num_current_status = 0;
+  struct live_status *previous_status = 0;
+  u32 num_previous_status = 0;
+  u32 next_poll = 0;
+  struct notify_state state = {.new =
+                                   push_align(arena, sizeof(struct live_status *) * NUM_LIVE_MAX),
+                               .config = &config,
+                               .youtube_favicon = youtube_favicon,
+                               .twitch_favicon = twitch_favicon,
+                               .pfp_path = pfp_path,
+                               .bus = bus,
+                               .notify_list = notify_list,
+                               .i = 0,
+                               .pfp_path_len = pfp_path_len,
+                               .num_new = 0};
 
   struct arena arena_0 = {0};
   struct arena arena_1 = {0};
@@ -830,12 +974,6 @@ int main(int argc, char *argv[]) {
     arena_1.max = (u8 *)arena->max;
     arena->max = arena->current;
   }
-
-  u64 timer_out;
-  struct live_status *current_status = 0;
-  u32 num_current_status = 0;
-  struct live_status *previous_status = 0;
-  u32 num_previous_status = 0;
 
   while (!quit) {
 
@@ -853,16 +991,19 @@ int main(int argc, char *argv[]) {
       expect_errno(ret >= 0, "epoll_ctl MOD sd_bus");
     }
 
-    struct epoll_event events[2] = {{0}, {0}};
+    struct epoll_event events[3] = {{0}, {0}, {0}};
     {
-      i32 ret = epoll_wait(epollfd, events, 2, 100);
+      i32 ret = epoll_wait(epollfd, events, 3, 100);
       expect(ret >= 0 || errno == EINTR);
     }
 
     while (sd_bus_process(bus, NULL) != 0) {
     }
 
-    if (events[0].data.u32 == TIMER_RETURN || events[1].data.u32 == TIMER_RETURN) {
+    // next poll
+    // something to assert no current notif
+    if ((events[0].data.u32 == TIMER_RETURN || events[1].data.u32 == TIMER_RETURN ||
+         events[2].data.u32 == TIMER_RETURN)) {
       {
         u64 r = read(tfd, &timer_out, 8);
         if (r != 8) {
@@ -870,214 +1011,156 @@ int main(int argc, char *argv[]) {
         }
       }
 
-      {
-        struct stat st = {};
-        i32 ret = fstat(config_fd, &st);
-        check_ret_syscall("Failed to get config.bin");
-        expect(st.st_size <= CHANNELS_FILE_MAX);
-        u64 new_time = st.st_mtime;
-        if (unlikely(new_time != last_mtime)) {
-          i32 ret = lseek(config_fd, 0, SEEK_SET);
-          check_ret_syscall("Failed seek on config.bin");
-          ret = read(config_fd, config_file, st.st_size);
-          check_ret_syscall("Failed to read channels file");
-          expect(ret == st.st_size);
-          last_mtime = new_time;
-          config = parse_config(config_file, st.st_size);
-          curlucode = curl_url_set(url, CURLUPART_QUERY, config.query_str, 0);
-          check_CURLUcode_full();
-        }
-      }
+      if (!state.num_new) {
 
-      {
-        data.size = 0;
-        memset(data.buf, 0, API_DATA_SIZE);
-        curlcode = curl_easy_perform(curl);
-        if (unlikely(curlcode != CURLE_OK)) {
-          if (curlcode == CURLE_OPERATION_TIMEDOUT || curlcode == CURLE_SEND_ERROR ||
-              curlcode == CURLE_RECV_ERROR) {
-            fprintf(stderr, "Network error (retry): %s\n", curl_easy_strerror(curlcode));
-            continue;
+        {
+          struct stat st = {};
+          i32 ret = fstat(config_fd, &st);
+          check_ret_syscall("Failed to get config.bin");
+          expect(st.st_size <= CHANNELS_FILE_MAX);
+          u64 new_time = st.st_mtime;
+          if (unlikely(new_time != last_mtime)) {
+            i32 ret = lseek(config_fd, 0, SEEK_SET);
+            check_ret_syscall("Failed seek on config.bin");
+            ret = read(config_fd, config_file, st.st_size);
+            check_ret_syscall("Failed to read channels file");
+            expect(ret == st.st_size);
+            last_mtime = new_time;
+            config = parse_config(config_file, st.st_size);
+            curlucode = curl_url_set(url, CURLUPART_QUERY, config.query_str, 0);
+            check_CURLUcode_full();
           }
-          fprintf(stderr, "Error at %u: %s\n", __LINE__, curl_easy_strerror(curlcode));
-          goto cleanup_error;
         }
-      }
 
-      // current_status and num_current_status are not valid before this
-      {
-        reset_arena(current_arena);
-        memset(json_buf, 0, JSON_BUF_MAX);
-        memset(intermediate, 0, NUM_LIVE_MAX * sizeof(struct live_status_ptr));
-        current_status =
-            parse_json(current_arena, &data, json_buf, intermediate, &num_current_status);
-        if (unlikely(current_status == 0)) {
-          goto cleanup_error;
-        }
-      }
-
-      for (u32 i = 0; i < num_current_status; ++i) {
-        c8 photo_path[PATH_MAX];
-        memcpy(photo_path, pfp_path, pfp_path_len);
-        memcpy(photo_path + pfp_path_len, current_status[i].photo_path,
-               current_status[i].photo_path_len);
-        i32 ret = access(photo_path, R_OK);
-        if (unlikely(ret == -1)) {
-          if (likely(errno == ENOENT)) {
-            // download it
-            curlcode = curl_easy_setopt(curl_download, CURLOPT_URL, current_status[i].photo_url);
-            check_CURLcode_full();
-            FILE *f = fopen(photo_path, "wb");
-            if (unlikely(f == 0)) {
-              printf("%s\n", photo_path);
-              perror("Failed to write file");
-              goto cleanup_error;
+        {
+          data.size = 0;
+          memset(data.buf, 0, API_DATA_SIZE);
+          curlcode = curl_easy_perform(curl);
+          if (unlikely(curlcode != CURLE_OK)) {
+            if (curlcode == CURLE_OPERATION_TIMEDOUT || curlcode == CURLE_SEND_ERROR ||
+                curlcode == CURLE_RECV_ERROR || curlcode == CURLE_COULDNT_RESOLVE_HOST) {
+              fprintf(stderr, "Network error (retry): %s\n", curl_easy_strerror(curlcode));
+              continue;
             }
-            curlcode = curl_easy_setopt(curl_download, CURLOPT_WRITEDATA, f);
-            check_CURLcode_full();
-            curlcode = curl_easy_perform(curl_download);
-            check_CURLcode_full();
-            fclose(f);
-          } else {
-            perror("Failed to access file in /pfp/");
+            fprintf(stderr, "Error at %u: %s\n", __LINE__, curl_easy_strerror(curlcode));
             goto cleanup_error;
           }
         }
-      }
 
-      struct live_status *new[NUM_LIVE_MAX];
-      u32 num_new = 0;
-      {
-        if (likely(session.base == 0)) {
-          for (u32 i = 0; i < num_current_status; ++i) {
-            struct live_status *cur = current_status + i;
-            u32 found = 0;
-            for (u32 j = 0; j < num_previous_status; ++j) {
-              struct live_status *prev = previous_status + j;
-              if (cur->id_len == prev->id_len && memcmp(cur->id, prev->id, cur->id_len) == 0) {
-                found = 1;
-              }
-            }
-            if (unlikely(!found)) {
-              new[num_new++] = cur;
-            }
+        // current_status and num_current_status are not valid before this
+        {
+          reset_arena(current_arena);
+          memset(json_buf, 0, JSON_BUF_MAX);
+          memset(intermediate, 0, NUM_LIVE_MAX * sizeof(struct live_status_ptr));
+          current_status =
+              parse_json(current_arena, &data, json_buf, intermediate, &num_current_status);
+          if (unlikely(current_status == 0)) {
+            goto cleanup_error;
           }
-        } else {
-          for (u32 i = 0; i < num_current_status; ++i) {
-            struct live_status *cur = current_status + i;
-            u32 found = 0;
-            for (u32 j = 0; j < session.num_entry; ++j) {
-              struct session_file_entry *prev = session.entries + j;
-              if (cur->id_len == prev->id.len &&
-                  memcmp(cur->id, session.string_pool + prev->id.offset, cur->id_len) == 0) {
-                found = 1;
-              }
-            }
-            if (!found) {
-              new[num_new++] = cur;
-            }
-          }
-          munmap(session.base, session.file_size);
-          session.base = 0;
         }
-      }
 
-      printf("Num new: %u\n", num_new);
-      for (u32 i = 0; i < num_new; ++i) {
-        struct live_status *cur = new[i];
-        struct config_file_entry *current_config =
-            bsearch_by_id(&config, cur->channel_id, cur->channel_id_len);
-        // TODO: if current_config == 0 then it means that a vtuber in "mentions" is in your config
-        if (current_config != 0) {
-          i32 open_direct = current_config->open_direct;
-          if (current_config->open_direct == -1) {
-            open_direct = config.defaults->open_direct;
-          }
-          if (open_direct != 1) {
-            i32 duration = current_config->duration;
-            if (current_config->duration == -1) {
-              duration = config.defaults->duration;
-            }
-            struct offset_string sound = current_config->sound;
-            if (config.string_pool[sound.offset] == 0) {
-              sound = config.defaults->sound;
-            }
-            c8 *sound_type;
-            if (config.string_pool[sound.offset] != '/') {
-              sound_type = "sound-name";
-            } else {
-              sound_type = "sound-file";
-            }
-            c8 *favicon = cur->link[0] == 0 ? youtube_favicon : twitch_favicon;
-            c8 image_uri[7 + PATH_MAX] = "file://";
-            memcpy(image_uri + 7, pfp_path, pfp_path_len);
-            memcpy(image_uri + 7 + pfp_path_len, cur->photo_path, cur->photo_path_len);
-            sd_bus_message *msg = 0;
-            i32 ret = sd_bus_call_method(
-                bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
-                "org.freedesktop.Notifications", "Notify", 0, &msg, "susssasa{sv}i", "live-notify",
-                0, favicon, config.string_pool + current_config->name.offset, cur->title, 2,
-                "default", "default", 4, "category", "s", "im.received", "image-path", "s",
-                image_uri, sound_type, "s", config.string_pool + sound.offset, "urgency", "y", 1,
-                duration);
-            expect(ret >= 0);
-            u32 id = 0;
-            sd_bus_message_read_basic(msg, 'u', &id);
-            sd_bus_message_unref(msg);
-            i32 min_idx = 0;
-            for (u32 i = 0; i < NUM_NOTIFICATION_MAX; ++i) {
-              if (notify_list[i].id == 0) {
-                notify_list[i].id = id;
-                if (cur->link[0] == 0) {
-                  memcpy(notify_list[i].link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
-                  expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
-                  memcpy(notify_list[i].link + sizeof(YOUTUBE_LINK) - 1, cur->id, cur->id_len);
-                } else {
-                  expect(cur->link_len <= LINK_MAX_LEN);
-                  memcpy(notify_list[i].link, cur->link, cur->link_len);
-                }
-                min_idx = -1;
-                break;
-              } else if (notify_list[i].id < notify_list[min_idx].id) {
-                min_idx = i;
+        for (u32 i = 0; i < num_current_status; ++i) {
+          c8 photo_path[PATH_MAX];
+          memcpy(photo_path, pfp_path, pfp_path_len);
+          memcpy(photo_path + pfp_path_len, current_status[i].photo_path,
+                 current_status[i].photo_path_len);
+          i32 ret = access(photo_path, R_OK);
+          if (unlikely(ret == -1)) {
+            if (likely(errno == ENOENT)) {
+              // download it
+              curlcode = curl_easy_setopt(curl_download, CURLOPT_URL, current_status[i].photo_url);
+              check_CURLcode_full();
+              FILE *f = fopen(photo_path, "wb");
+              if (unlikely(f == 0)) {
+                printf("%s\n", photo_path);
+                perror("Failed to write file");
+                goto cleanup_error;
               }
+              curlcode = curl_easy_setopt(curl_download, CURLOPT_WRITEDATA, f);
+              check_CURLcode_full();
+              curlcode = curl_easy_perform(curl_download);
+              check_CURLcode_full();
+              fclose(f);
+            } else {
+              perror("Failed to access file in /pfp/");
+              goto cleanup_error;
             }
-            if (min_idx != -1) {
-              notify_list[min_idx].id = id;
-              if (cur->link[0] == 0) {
-                memcpy(notify_list[min_idx].link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
-                expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
-                memcpy(notify_list[min_idx].link + sizeof(YOUTUBE_LINK), cur->id, cur->id_len);
-              } else {
-                expect(cur->link_len <= LINK_MAX_LEN);
-                memcpy(notify_list[min_idx].link, cur->link, cur->link_len);
+          }
+        }
+
+        state.num_new = 0;
+        {
+          if (likely(session.base == 0)) {
+            for (u32 i = 0; i < num_current_status; ++i) {
+              struct live_status *cur = current_status + i;
+              u32 found = 0;
+              for (u32 j = 0; j < num_previous_status; ++j) {
+                struct live_status *prev = previous_status + j;
+                if (cur->id_len == prev->id_len && memcmp(cur->id, prev->id, cur->id_len) == 0) {
+                  found = 1;
+                }
+              }
+              if (unlikely(!found)) {
+                state.new[state.num_new++] = cur;
               }
             }
           } else {
-            c8 link[LINK_MAX_LEN];
-            if (cur->link[0] == 0) {
-              memcpy(link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
-              expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
-              memcpy(link + sizeof(YOUTUBE_LINK) - 1, cur->id, cur->id_len);
-            } else {
-              expect(cur->link_len <= LINK_MAX_LEN);
-              memcpy(link, cur->link, cur->link_len);
-            }
-            u64 pid = fork();
-            if (pid == 0) {
-              i32 fd = open("/dev/null", O_WRONLY);
-              if (likely(fd != -1)) {
-                dup2(fd, STDOUT_FILENO);
-                dup2(fd, STDERR_FILENO);
+            for (u32 i = 0; i < num_current_status; ++i) {
+              struct live_status *cur = current_status + i;
+              u32 found = 0;
+              for (u32 j = 0; j < session.num_entry; ++j) {
+                struct session_file_entry *prev = session.entries + j;
+                if (cur->id_len == prev->id.len &&
+                    memcmp(cur->id, session.string_pool + prev->id.offset, cur->id_len) == 0) {
+                  found = 1;
+                }
               }
-              c8 *argv0 = "/usr/bin/brave";
-              c8 *argv[] = {argv0, link, 0};
-              execv(argv0, argv);
+              if (!found) {
+                state.new[state.num_new++] = cur;
+              }
             }
+            munmap(session.base, session.file_size);
+            session.base = 0;
           }
         }
-      }
 
+        printf("Num new: %u\n", state.num_new);
+        if (state.num_new != 0) {
+          state.i = 0;
+
+          struct itimerspec its = {.it_value.tv_sec = NOTIFICATION_DELAY_SECOND,
+                                   .it_value.tv_nsec = 0,
+                                   .it_interval.tv_sec = NOTIFICATION_DELAY_SECOND,
+                                   .it_interval.tv_nsec = 0};
+          i32 ret = timerfd_settime(delay_tfd, 0, &its, 0);
+          check_ret_syscall("Failed to set timer");
+        } else {
+          next_poll = 1;
+        }
+      }
+    }
+
+    if (events[0].data.u32 == DELAY_RETURN || events[1].data.u32 == DELAY_RETURN ||
+        events[2].data.u32 == DELAY_RETURN) {
+      {
+        read(delay_tfd, &timer_out, 8);
+      }
+      notify(&state);
+      state.i++;
+      if (state.i >= state.num_new) {
+        struct itimerspec its = {.it_value.tv_sec = 0,
+                                 .it_value.tv_nsec = 0,
+                                 .it_interval.tv_sec = NOTIFICATION_DELAY_SECOND,
+                                 .it_interval.tv_nsec = 0};
+        i32 ret = timerfd_settime(delay_tfd, 0, &its, 0);
+        check_ret_syscall("Failed to set timer");
+        next_poll = 1;
+        state.num_new = 0;
+      }
+    }
+
+    if (next_poll) {
+      next_poll = 0;
       if (current_arena == &arena_0) {
         current_arena = &arena_1;
       } else {
