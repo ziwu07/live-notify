@@ -51,4 +51,8 @@ internal inline i32 cmp_str(const struct ptr_string a, const struct ptr_string b
   return diff ? diff : len_a - len_b;
 }
 
+#define CONFIG_TXT_DEFAULT                                                                         \
+  "open_direct=0\nduration=10m\nsound=message-new-instant\nsilent_start=\nsilent_end=\n"           \
+  "pause_start=23:00\npause_end=9:00\nopen_direct_only_start=\nopen_direct_only_end=\n"
+
 #endif

@@ -288,27 +288,27 @@ internal inline struct offset_string cpy_field(struct arena *arena, struct ptr_s
 
 int main(int argc, char *argv[]) {
   (void)argc, (void)argv;
-  c8 config_path[PATH_MAX];
-  get_file_path(config, "config.csv", config_path);
+  c8 channels_path[PATH_MAX];
+  get_file_path(config, "channels.csv", channels_path);
   c8 config_out_path[PATH_MAX];
   get_file_path(state, "config.bin", config_out_path);
-  i32 config_fd = open(config_path, O_RDONLY);
+  i32 config_fd = open(channels_path, O_RDONLY);
   if (config_fd == -1) {
     if (errno == ENOENT) {
-      fprintf(stderr, "Error: config.csv not found, run setup-config first\n");
+      fprintf(stderr, "Error: channels.csv not found, run setup-config first\n");
       return 1;
     }
-    perror("Error opening config.csv");
+    perror("Error opening channels.csv");
     return 1;
   }
   struct stat config_st;
   {
     i32 ret = fstat(config_fd, &config_st);
-    expect_errno(ret != -1, "fstat config.csv");
+    expect_errno(ret != -1, "fstat channels.csv");
   }
   u64 config_size = config_st.st_size;
   u8 *config = mmap(0, config_size, PROT_READ, MAP_SHARED, config_fd, 0);
-  expect_errno(config != MAP_FAILED, "mmap config.csv");
+  expect_errno(config != MAP_FAILED, "mmap channels.csv");
 
   u8 *mem = mmap(0, 128 * 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
   expect_errno(mem != MAP_FAILED, "mmap memory");
@@ -321,7 +321,7 @@ int main(int argc, char *argv[]) {
   u32 num_config_entry = parse_config(config, config_size, arena, &parsed_defaults, &sound_str);
 
   if (unlikely(num_config_entry == 0)) {
-    fprintf(stderr, "Error: no entries found in config.csv\n");
+    fprintf(stderr, "Error: no entries found in channels.csv\n");
     return 1;
   }
 

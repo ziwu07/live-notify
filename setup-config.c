@@ -77,9 +77,9 @@ internal inline i32 stringeq(const struct ptr_string a, const struct ptr_string 
   return memcmp(a.start, b.start, a.end - a.start) == 0;
 }
 
-internal u32 parse_config(u8 *config, u64 size, struct entry *entries, u8 **first_line_end) {
-  u8 *ptr = config;
-  u8 *end = config + size;
+internal u32 parse_channels(u8 *channels, u64 size, struct entry *entries, u8 **first_line_end) {
+  u8 *ptr = channels;
+  u8 *end = channels + size;
   u8 *line_start = ptr;
   u32 entry_count = 0;
   u32 line_count = 0;
@@ -174,17 +174,19 @@ internal u32 parse_config(u8 *config, u64 size, struct entry *entries, u8 **firs
 int main(int argc, char *argv[]) {
   (void)argc, (void)argv;
   c8 config_path[PATH_MAX];
-  get_file_path(config, "config.csv", config_path);
+  get_file_path(config, "config.txt", config_path);
+  c8 channels_path[PATH_MAX];
+  get_file_path(config, "channels.csv", channels_path);
   c8 web_page_path[PATH_MAX];
   get_file_path(config, "page.html", web_page_path);
   i32 fd = open(web_page_path, O_RDONLY);
   // TODO: directory already exists but file does not
   if (fd == -1) {
     if (likely(errno == ENOENT)) {
-      c8 xdg_config_path[PATH_MAX];
-      get_path_xdg_config(xdg_config_path);
-      i32 ret = mkdir(xdg_config_path, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
-      expect_errno(ret != -1, "Error creating config directory");
+      c8 xdg_channels_path[PATH_MAX];
+      get_path_xdg_config(xdg_channels_path);
+      i32 ret = mkdir(xdg_channels_path, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+      expect_errno(ret != -1, "Error creating channels directory");
       // TODO: give instruction on how to get page.html
       return 0;
     } else {
@@ -200,39 +202,41 @@ int main(int argc, char *argv[]) {
   u64 size = st.st_size;
   u8 *page = mmap(0, size, PROT_READ, MAP_SHARED, fd, 0);
   expect_errno(page != MAP_FAILED, "mmap page.html");
+  close(fd);
 
   u8 *mem = mmap(0, 128 * 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
   expect_errno(mem != MAP_FAILED, "mmap memory");
-  struct entry *config_entries = (struct entry *)mem;
-  u32 num_config_entry = 0;
+  struct entry *channels_entries = (struct entry *)mem;
+  u32 num_channels_entry = 0;
 
-  u32 config_exists = 1;
-  struct entry **config_entry_sort_order = 0;
-  u8 *config;
+  u32 channels_exists = 1;
+  struct entry **channels_entry_sort_order = 0;
+  u8 *channels;
   u8 *first_line_end;
-  i32 config_fd = open(config_path, O_RDONLY);
-  if (config_fd == -1) {
+  i32 channels_fd = open(channels_path, O_RDONLY);
+  if (channels_fd == -1) {
     expect(errno == ENOENT);
-    config_exists = 0;
+    channels_exists = 0;
   } else {
-    struct stat config_st;
+    struct stat channels_st;
     {
-      i32 ret = fstat(config_fd, &config_st);
-      expect_errno(ret != -1, "fstat config.csv");
+      i32 ret = fstat(channels_fd, &channels_st);
+      expect_errno(ret != -1, "fstat channels.csv");
     }
-    u64 config_size = config_st.st_size;
-    config = mmap(0, config_size, PROT_READ, MAP_SHARED, config_fd, 0);
-    expect_errno(config != MAP_FAILED, "mmap config.csv");
+    u64 channels_size = channels_st.st_size;
+    channels = mmap(0, channels_size, PROT_READ, MAP_SHARED, channels_fd, 0);
+    expect_errno(channels != MAP_FAILED, "mmap channels.csv");
+    close(channels_fd);
 
-    num_config_entry = parse_config(config, config_size, config_entries, &first_line_end);
-    mem += sizeof(struct entry) * num_config_entry;
+    num_channels_entry = parse_channels(channels, channels_size, channels_entries, &first_line_end);
+    mem += sizeof(struct entry) * num_channels_entry;
 
-    struct entry **config_entry_sort_order = (struct entry **)mem;
-    for (u32 i = 0; i < num_config_entry; ++i) {
-      config_entry_sort_order[i] = config_entries + i;
+    struct entry **channels_entry_sort_order = (struct entry **)mem;
+    for (u32 i = 0; i < num_channels_entry; ++i) {
+      channels_entry_sort_order[i] = channels_entries + i;
     }
-    qsort(config_entry_sort_order, num_config_entry, sizeof(struct entry *), cmp_entry_by_id);
-    mem += sizeof(struct entry *) * num_config_entry;
+    qsort(channels_entry_sort_order, num_channels_entry, sizeof(struct entry *), cmp_entry_by_id);
+    mem += sizeof(struct entry *) * num_channels_entry;
   }
 
   u8 *ptr = page;
@@ -260,8 +264,8 @@ int main(int argc, char *argv[]) {
         current_entry->id.end = next - 2;
         expect(current_entry->id.end - current_entry->id.start == 24);
         u8 *existing_elem = 0;
-        if (config_exists) {
-          existing_elem = bsearch(&current_entry, config_entry_sort_order, num_config_entry,
+        if (channels_exists) {
+          existing_elem = bsearch(&current_entry, channels_entry_sort_order, num_channels_entry,
                                   sizeof(struct entry *), cmp_entry_by_id);
         }
         if (existing_elem == 0) {
@@ -286,25 +290,26 @@ int main(int argc, char *argv[]) {
   };
   mem += sizeof(struct entry) * num_new_entry;
 
-  u32 num_total_entry = num_config_entry + num_new_entry;
+  u32 num_total_entry = num_channels_entry + num_new_entry;
   struct entry **sort_order = (struct entry **)mem;
-  for (u32 i = 0; i < num_config_entry; ++i) {
-    sort_order[i] = config_entries + i;
+  for (u32 i = 0; i < num_channels_entry; ++i) {
+    sort_order[i] = channels_entries + i;
   }
   for (u32 i = 0; i < num_new_entry; ++i) {
-    sort_order[i + num_config_entry] = entries + i;
+    sort_order[i + num_channels_entry] = entries + i;
   }
   qsort(sort_order, num_total_entry, sizeof(struct entry *), cmp_entry_by_org_then_name);
   mem += sizeof(struct entry *) * num_total_entry;
 
   u8 *out_base = mem;
   u8 *out_current = out_base;
-  if (config_exists) {
-    memcpy(out_current, config, first_line_end - config);
-    out_current += first_line_end - config;
+  if (channels_exists) {
+    memcpy(out_current, channels, first_line_end - channels);
+    out_current += first_line_end - channels;
     *(out_current++) = '\n';
   } else {
-    cstringcpy(out_current, "open_direct=0,duration=10m,sound=message-new-instant\n");
+    cstringcpy(out_current, "TODO: header\n");
+    // TODO: header
   }
   for (u32 i = 0; i < num_total_entry; ++i) {
     struct entry *current_entry = sort_order[i];
@@ -340,10 +345,27 @@ int main(int argc, char *argv[]) {
     }
   }
   i32 out_fd =
-      open(config_path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-  expect_errno(out_fd != -1, "Error opening config.csv");
+      open(channels_path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  expect_errno(out_fd != -1, "Error opening channels.csv");
   i64 ret = write(out_fd, out_base, out_current - out_base);
   expect(ret == out_current - out_base);
   close(out_fd);
+  {
+    i32 ret = access(config_path, R_OK);
+    if (ret == -1) {
+      if (errno == ENOENT) {
+        i32 config_fd =
+            open(config_path, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+        expect_errno(config_fd != -1, "Error creating config.txt");
+        write(config_fd, CONFIG_TXT_DEFAULT, sizeof(CONFIG_TXT_DEFAULT));
+        close(config_fd);
+      } else {
+        perror("Error opening config.txt");
+        return 1;
+      }
+    } else {
+      return 1;
+    }
+  }
   return 0;
 }
