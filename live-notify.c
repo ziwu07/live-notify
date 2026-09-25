@@ -131,7 +131,7 @@ struct live_status_ptr {
 
 struct parsed_config_file {
   struct config_file_entry *entries;
-  struct config_file_defaults *defaults;
+  struct config_file_config *defaults;
   c8 *query_str;
   u8 *string_pool;
   u32 num_entry;
@@ -411,7 +411,7 @@ internal inline struct parsed_config_file parse_config(u8 *config_file, i64 file
   }
   res.entries = (struct config_file_entry *)(header + 1);
   res.num_entry = header->num_entry;
-  res.defaults = (struct config_file_defaults *)(res.entries + header->num_entry);
+  res.defaults = (struct config_file_config *)(res.entries + header->num_entry);
   res.query_str = (c8 *)(res.defaults + 1);
   res.string_pool = (u8 *)(res.query_str + header->query_str_len);
   u8 *end = res.string_pool + header->string_pool_len;

@@ -37,7 +37,7 @@ struct __attribute__((__packed__)) config_file_entry {
   struct offset_string sound;
 };
 
-struct __attribute__((__packed__)) config_file_defaults {
+struct __attribute__((__packed__)) config_file_config {
   i32 open_direct;
   i32 duration;
   struct offset_string sound;

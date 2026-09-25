@@ -37,6 +37,8 @@ internal i32 cmp_entry_by_id(const void *a, const void *b) {
 #define cstringeq(start, end, str)                                                                 \
   (sizeof(str) - 1 == end - start ? memcmp(start, str, end - start) == 0 : 0)
 
+#define starteq(start, string) (memcmp(start, string, sizeof(string) - 1) == 0)
+
 internal inline i32 parse_open_direct(const struct ptr_string val) {
   if ((val.end - val.start == 1) && *val.start == '?') {
     return -1;
@@ -88,11 +90,11 @@ internal inline struct ptr_string parse_sound(const struct ptr_string val) {
   return val;
 }
 
-internal u32 parse_config(u8 *config, u64 size, struct arena *arena,
-                          struct config_file_defaults *parsed_default,
-                          struct ptr_string *sound_str) {
-  u8 *ptr = config;
-  u8 *end = config + size;
+internal u32 parse_channels(u8 *channels, u64 size, struct arena *arena,
+                            struct config_file_config *parsed_default,
+                            struct ptr_string *sound_str) {
+  u8 *ptr = channels;
+  u8 *end = channels + size;
   u8 *line_start = ptr;
   u32 entry_count = 0;
   u32 line_count = 0;
@@ -182,7 +184,8 @@ internal u32 parse_config(u8 *config, u64 size, struct arena *arena,
         }
 
         entry_count++;
-      } else if (line_count == 0) {
+      }
+      /* else if (line_count == 0) {
         u8 *scan = line_start;
         {
           u8 *eq = scan;
@@ -267,6 +270,7 @@ internal u32 parse_config(u8 *config, u64 size, struct arena *arena,
           sound_str->end = field.end;
         }
       }
+      */
 
       line_start = ptr + 1;
       line_count++;
@@ -275,6 +279,20 @@ internal u32 parse_config(u8 *config, u64 size, struct arena *arena,
   }
 
   return entry_count;
+}
+
+internal inline void parse_config(u8 *config_file, u64 size, struct config_file_config *config) {
+  u8 *line_start = config_file, *line_end, *ptr = config_file;
+  while (ptr < config_file + size) {
+    if (*ptr == '\n') {
+      line_end = ptr;
+      // do
+      if (starteq(line_start, "open_direct=")) {
+      }
+      line_start = ptr + 1;
+    }
+    ptr++;
+  }
 }
 
 internal inline struct offset_string cpy_field(struct arena *arena, struct ptr_string str) {
@@ -290,10 +308,12 @@ int main(int argc, char *argv[]) {
   (void)argc, (void)argv;
   c8 channels_path[PATH_MAX];
   get_file_path(config, "channels.csv", channels_path);
+  c8 config_path[PATH_MAX];
+  get_file_path(config, "config.txt", config_path);
   c8 config_out_path[PATH_MAX];
   get_file_path(state, "config.bin", config_out_path);
-  i32 config_fd = open(channels_path, O_RDONLY);
-  if (config_fd == -1) {
+  i32 channels_fd = open(channels_path, O_RDONLY);
+  if (channels_fd == -1) {
     if (errno == ENOENT) {
       fprintf(stderr, "Error: channels.csv not found, run setup-config first\n");
       return 1;
@@ -301,47 +321,67 @@ int main(int argc, char *argv[]) {
     perror("Error opening channels.csv");
     return 1;
   }
+  struct stat channels_st;
+  {
+    i32 ret = fstat(channels_fd, &channels_st);
+    expect_errno(ret != -1, "fstat channels.csv");
+  }
+  u64 channels_size = channels_st.st_size;
+  u8 *channels = mmap(0, channels_size, PROT_READ, MAP_SHARED, channels_fd, 0);
+  expect_errno(channels != MAP_FAILED, "mmap channels.csv");
+
+  i32 config_fd = open(config_path, O_RDONLY);
+  if (config_fd == -1) {
+    if (errno == ENOENT) {
+      fprintf(stderr, "Error: config.txt not found, run setup-config first\n");
+      return 1;
+    }
+    perror("Error opening config.txt");
+    return 1;
+  }
   struct stat config_st;
   {
     i32 ret = fstat(config_fd, &config_st);
-    expect_errno(ret != -1, "fstat channels.csv");
+    expect_errno(ret != -1, "fstat config.txt");
   }
   u64 config_size = config_st.st_size;
-  u8 *config = mmap(0, config_size, PROT_READ, MAP_SHARED, config_fd, 0);
-  expect_errno(config != MAP_FAILED, "mmap channels.csv");
+  u8 *config_file = mmap(0, config_size, PROT_READ, MAP_SHARED, config_fd, 0);
+  expect_errno(config_file != MAP_FAILED, "mmap config.csv");
+  // TODO: parse config
 
   u8 *mem = mmap(0, 128 * 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
   expect_errno(mem != MAP_FAILED, "mmap memory");
   struct arena arena_ = {.mem = mem, .current = mem, .max = mem + 128 * 4096};
   struct arena *arena = &arena_;
-  struct entry *config_entries = (struct entry *)arena->current;
+  struct entry *channels_entries = (struct entry *)arena->current;
 
-  struct config_file_defaults parsed_defaults = {};
+  struct config_file_config parsed_defaults = {};
   struct ptr_string sound_str;
-  u32 num_config_entry = parse_config(config, config_size, arena, &parsed_defaults, &sound_str);
+  u32 num_channels_entry =
+      parse_channels(channels, channels_size, arena, &parsed_defaults, &sound_str);
 
-  if (unlikely(num_config_entry == 0)) {
+  if (unlikely(num_channels_entry == 0)) {
     fprintf(stderr, "Error: no entries found in channels.csv\n");
     return 1;
   }
 
-  struct entry **config_entry_sort_order =
-      (struct entry **)push(arena, num_config_entry * sizeof(struct entry *));
-  for (u32 i = 0; i < num_config_entry; ++i) {
-    config_entry_sort_order[i] = config_entries + i;
+  struct entry **channels_entry_sort_order =
+      (struct entry **)push(arena, num_channels_entry * sizeof(struct entry *));
+  for (u32 i = 0; i < num_channels_entry; ++i) {
+    channels_entry_sort_order[i] = channels_entries + i;
   }
-  qsort(config_entry_sort_order, num_config_entry, sizeof(struct entry *), cmp_entry_by_id);
+  qsort(channels_entry_sort_order, num_channels_entry, sizeof(struct entry *), cmp_entry_by_id);
 
   u8 *begin = push(arena, sizeof(struct config_file_header));
   struct config_file_header *header = (struct config_file_header *)begin;
   header->magic = CONFIG_FILE_MAGIC;
   header->version = 1;
-  header->num_entry = num_config_entry;
+  header->num_entry = num_channels_entry;
 
   struct config_file_entry *file_entries =
-      push(arena, num_config_entry * sizeof(struct config_file_entry));
+      push(arena, num_channels_entry * sizeof(struct config_file_entry));
 
-  struct config_file_defaults *file_defaults = push(arena, sizeof(struct config_file_defaults));
+  struct config_file_config *file_defaults = push(arena, sizeof(struct config_file_config));
   file_defaults->open_direct = parsed_defaults.open_direct;
   file_defaults->duration = parsed_defaults.duration;
 
@@ -350,15 +390,15 @@ int main(int argc, char *argv[]) {
     u8 *prefix = push(arena, sizeof(PREFIX) - 1);
     query_str_len += sizeof(PREFIX) - 1;
     memcpy(prefix, PREFIX, sizeof(PREFIX) - 1);
-    for (u32 i = 0; i < num_config_entry - 1; ++i) {
-      struct entry *entry = config_entries + i;
+    for (u32 i = 0; i < num_channels_entry - 1; ++i) {
+      struct entry *entry = channels_entries + i;
       u8 *id = push(arena, entry->id.end - entry->id.start + 3);
       query_str_len += entry->id.end - entry->id.start + 3;
       memcpy(id, entry->id.start, entry->id.end - entry->id.start);
       id += entry->id.end - entry->id.start;
       memcpy(id, SEP, sizeof(SEP) - 1);
     }
-    struct entry *entry = config_entries + num_config_entry - 1;
+    struct entry *entry = channels_entries + num_channels_entry - 1;
     u8 *id = push(arena, entry->id.end - entry->id.start + 1);
     query_str_len += entry->id.end - entry->id.start + 1;
     memcpy(id, entry->id.start, entry->id.end - entry->id.start);
@@ -371,8 +411,8 @@ int main(int argc, char *argv[]) {
       .mem = arena_.current, .current = arena_.current, .max = arena_.max};
   struct arena *string_arena = &string_arena_;
   {
-    for (u32 i = 0; i < num_config_entry; ++i) {
-      struct entry *entry = config_entry_sort_order[i];
+    for (u32 i = 0; i < num_channels_entry; ++i) {
+      struct entry *entry = channels_entry_sort_order[i];
       struct config_file_entry *file_entry = file_entries + i;
       file_entry->id = cpy_field(string_arena, entry->id);
       file_entry->name = cpy_field(string_arena, entry->name);
