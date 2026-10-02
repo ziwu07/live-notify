@@ -90,9 +90,7 @@ internal inline struct ptr_string parse_sound(const struct ptr_string val) {
   return val;
 }
 
-internal u32 parse_channels(u8 *channels, u64 size, struct arena *arena,
-                            struct config_file_config *parsed_default,
-                            struct ptr_string *sound_str) {
+internal u32 parse_channels(u8 *channels, u64 size, struct arena *arena) {
   u8 *ptr = channels;
   u8 *end = channels + size;
   u8 *line_start = ptr;
@@ -185,93 +183,6 @@ internal u32 parse_channels(u8 *channels, u64 size, struct arena *arena,
 
         entry_count++;
       }
-      /* else if (line_count == 0) {
-        u8 *scan = line_start;
-        {
-          u8 *eq = scan;
-          while (eq < line_end && *eq != ',') {
-            eq++;
-          }
-          struct ptr_string field = {scan, eq};
-          u8 *dv = field.start;
-          while (dv < field.end && *dv != '=') {
-            dv++;
-          }
-          expect(cstringeq(field.start, dv + 1, "open_direct="));
-          if ((field.end - (dv + 1) == 1) && (*(dv + 1) == '0' || *(dv + 1) == '1')) {
-            parsed_default->open_direct = (u32)(*(dv + 1) - '0');
-          } else {
-            fprintf(stderr,
-                    "Error: invalid open_direct default value '%.*s', expected '0' or '1'\n",
-                    (i32)(field.end - (dv + 1)), dv + 1);
-            exit(1);
-          }
-          scan = eq + 1;
-        }
-
-        {
-          u8 *eq = scan;
-          while (eq < line_end && *eq != ',') {
-            eq++;
-          }
-          struct ptr_string field = {scan, eq};
-          u8 *dv = field.start;
-          while (dv < field.end && *dv != '=') {
-            dv++;
-          }
-          expect(cstringeq(field.start, dv + 1, "duration="));
-          c8 *endptr;
-          i64 result = strtoll((c8 *)(dv + 1), &endptr, 10);
-          if (result < 0 || result != (u32)result) {
-            fprintf(
-                stderr,
-                "Error: invalid duration default value '%.*s', not a valid non-negative integer\n",
-                (i32)(field.end - (dv + 1)), dv + 1);
-            exit(1);
-          }
-          if ((u8 *)endptr == field.end - 1) {
-            if (*endptr == 's') {
-              parsed_default->duration = result * 1000;
-            } else if (*endptr == 'm') {
-              parsed_default->duration = result * 60 * 1000;
-            } else if (*endptr == 'h') {
-              parsed_default->duration = result * 60 * 60 * 1000;
-            } else {
-              fprintf(stderr,
-                      "Error: invalid duration postfix '%c' in '%.*s', expected 's', 'm', or 'h'\n",
-                      *endptr, (i32)(field.end - (dv + 1)), dv + 1);
-              exit(1);
-            }
-          } else if ((u8 *)endptr == field.end) {
-            // default to seconds
-            parsed_default->duration = result * 1000;
-          } else {
-            fprintf(
-                stderr,
-                "Error: invalid duration default value '%.*s', contains unexpected characters\n",
-                (i32)(field.end - (dv + 1)), dv + 1);
-            exit(1);
-          }
-          scan = eq + 1;
-        }
-
-        {
-          u8 *eq = scan;
-          while (eq < line_end && *eq != ',') {
-            eq++;
-          }
-          struct ptr_string field = {scan, eq};
-          u8 *dv = field.start;
-          while (dv < field.end && *dv != '=') {
-            dv++;
-          }
-          expect(cstringeq(field.start, dv + 1, "sound="));
-          sound_str->start = dv + 1;
-          sound_str->end = field.end;
-        }
-      }
-      */
-
       line_start = ptr + 1;
       line_count++;
     }
@@ -281,17 +192,74 @@ internal u32 parse_channels(u8 *channels, u64 size, struct arena *arena,
   return entry_count;
 }
 
-internal inline void parse_config(u8 *config_file, u64 size, struct config_file_config *config) {
+internal inline void parse_config(u8 *config_file, u64 size, struct config_file_config *config,
+                                  struct ptr_string *default_sound_str) {
   u8 *line_start = config_file, *line_end, *ptr = config_file;
+  u32 has_open_direct = 0, has_duration = 0, has_sound = 0;
   while (ptr < config_file + size) {
     if (*ptr == '\n') {
       line_end = ptr;
-      // do
       if (starteq(line_start, "open_direct=")) {
+        u8 *value = line_start + 12;
+        if ((line_end - value == 1) && (*value == '0' || *value == '1')) {
+          config->open_direct = (u32)(*value - '0');
+          has_open_direct = 1;
+        } else {
+          fprintf(stderr, "Error: invalid open_direct default value '%.*s', expected '0' or '1'\n",
+                  (i32)(line_end - value), value);
+          exit(1);
+        }
+      } else if (starteq(line_start, "duration=")) {
+        u8 *value = line_start + 9;
+        c8 *endptr;
+        i64 result = strtoll((c8 *)value, &endptr, 10);
+        if (result < 0 || result != (u32)result) {
+          fprintf(
+              stderr,
+              "Error: invalid duration default value '%.*s', not a valid non-negative integer\n",
+              (i32)(line_end - value), value);
+          exit(1);
+        }
+        if ((u8 *)endptr == line_end - 1) {
+          if (*endptr == 's') {
+            config->duration = result * 1000;
+            has_duration = 1;
+          } else if (*endptr == 'm') {
+            config->duration = result * 60 * 1000;
+            has_duration = 1;
+          } else if (*endptr == 'h') {
+            config->duration = result * 60 * 60 * 1000;
+            has_duration = 1;
+          } else {
+            fprintf(stderr,
+                    "Error: invalid duration postfix '%c' in '%.*s', expected 's', 'm', or 'h'\n",
+                    *endptr, (i32)(line_end - value), value);
+            exit(1);
+          }
+        } else if ((u8 *)endptr == line_end) {
+          // default to seconds
+          config->duration = result * 1000;
+        } else {
+          fprintf(stderr,
+                  "Error: invalid duration default value '%.*s', contains unexpected characters\n",
+                  (i32)(line_end - value), value);
+          exit(1);
+        }
+      } else if (starteq(line_start, "sound=")) {
+        u8 *value = line_start + 6;
+        default_sound_str->start = value;
+        default_sound_str->end = line_end;
+        has_sound = 1;
       }
       line_start = ptr + 1;
     }
     ptr++;
+  }
+  if (!has_open_direct) {
+  }
+  if (!has_duration) {
+  }
+  if (!has_sound) {
   }
 }
 
@@ -355,10 +323,10 @@ int main(int argc, char *argv[]) {
   struct arena *arena = &arena_;
   struct entry *channels_entries = (struct entry *)arena->current;
 
-  struct config_file_config parsed_defaults = {};
-  struct ptr_string sound_str;
-  u32 num_channels_entry =
-      parse_channels(channels, channels_size, arena, &parsed_defaults, &sound_str);
+  struct config_file_config parsed_config = {};
+  struct ptr_string default_sound_str = {};
+  parse_config(config_file, config_size, &parsed_config, &default_sound_str);
+  u32 num_channels_entry = parse_channels(channels, channels_size, arena);
 
   if (unlikely(num_channels_entry == 0)) {
     fprintf(stderr, "Error: no entries found in channels.csv\n");
@@ -381,9 +349,8 @@ int main(int argc, char *argv[]) {
   struct config_file_entry *file_entries =
       push(arena, num_channels_entry * sizeof(struct config_file_entry));
 
-  struct config_file_config *file_defaults = push(arena, sizeof(struct config_file_config));
-  file_defaults->open_direct = parsed_defaults.open_direct;
-  file_defaults->duration = parsed_defaults.duration;
+  struct config_file_config *file_config = push(arena, sizeof(struct config_file_config));
+  memcpy(file_config, &parsed_config, sizeof(struct config_file_config));
 
   u32 query_str_len = 0;
   {
@@ -423,7 +390,7 @@ int main(int argc, char *argv[]) {
       file_entry->sound = cpy_field(string_arena, entry->sound);
     }
   }
-  file_defaults->sound = cpy_field(string_arena, sound_str);
+  file_config->sound = cpy_field(string_arena, default_sound_str);
   header->string_pool_len = (u8 *)string_arena_.current - (u8 *)string_arena_.mem;
 
   i32 out_fd =
