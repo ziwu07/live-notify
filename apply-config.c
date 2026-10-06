@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #define PREFIX "includePlaceholder=true&channels="
@@ -192,6 +193,16 @@ internal u32 parse_channels(u8 *channels, u64 size, struct arena *arena) {
   return entry_count;
 }
 
+internal inline struct time8 parse_time(u8 *start, u8 *end) {
+  struct tm tp;
+  u8 *res = (u8 *)strptime((c8 *)start, "%H:%M", &tp);
+  if (res == end) {
+    return (struct time8){tp.tm_hour, tp.tm_min};
+  } else {
+    return (struct time8){-1, -1};
+  }
+}
+
 internal inline void parse_config(u8 *config_file, u64 size, struct config_file_config *config,
                                   struct ptr_string *default_sound_str) {
   u8 *line_start = config_file, *line_end, *ptr = config_file;
@@ -250,6 +261,24 @@ internal inline void parse_config(u8 *config_file, u64 size, struct config_file_
         default_sound_str->start = value;
         default_sound_str->end = line_end;
         has_sound = 1;
+      } else if (starteq(line_start, "silent_start=")) {
+        u8 *value = line_start + 13;
+        config->silent.start = parse_time(value, line_end);
+      } else if (starteq(line_start, "silent_end=")) {
+        u8 *value = line_start + 11;
+        config->silent.end = parse_time(value, line_end);
+      } else if (starteq(line_start, "pause_start=")) {
+        u8 *value = line_start + 12;
+        config->pause.start = parse_time(value, line_end);
+      } else if (starteq(line_start, "pause_end=")) {
+        u8 *value = line_start + 10;
+        config->pause.end = parse_time(value, line_end);
+      } else if (starteq(line_start, "open_direct_only_start=")) {
+        u8 *value = line_start + 23;
+        config->open_direct_only.start = parse_time(value, line_end);
+      } else if (starteq(line_start, "open_direct_only_end=")) {
+        u8 *value = line_start + 21;
+        config->open_direct_only.end = parse_time(value, line_end);
       }
       line_start = ptr + 1;
     }
@@ -315,7 +344,6 @@ int main(int argc, char *argv[]) {
   u64 config_size = config_st.st_size;
   u8 *config_file = mmap(0, config_size, PROT_READ, MAP_SHARED, config_fd, 0);
   expect_errno(config_file != MAP_FAILED, "mmap config.csv");
-  // TODO: parse config
 
   u8 *mem = mmap(0, 128 * 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
   expect_errno(mem != MAP_FAILED, "mmap memory");

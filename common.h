@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define i8 int8_t
 #define u8 uint8_t
 #define c8 char
 #define u32 uint32_t

@@ -131,7 +131,7 @@ struct live_status_ptr {
 
 struct parsed_config_file {
   struct config_file_entry *entries;
-  struct config_file_config *defaults;
+  struct config_file_config *config;
   c8 *query_str;
   u8 *string_pool;
   u32 num_entry;
@@ -411,8 +411,8 @@ internal inline struct parsed_config_file parse_config(u8 *config_file, i64 file
   }
   res.entries = (struct config_file_entry *)(header + 1);
   res.num_entry = header->num_entry;
-  res.defaults = (struct config_file_config *)(res.entries + header->num_entry);
-  res.query_str = (c8 *)(res.defaults + 1);
+  res.config = (struct config_file_config *)(res.entries + header->num_entry);
+  res.query_str = (c8 *)(res.config + 1);
   res.string_pool = (u8 *)(res.query_str + header->query_str_len);
   u8 *end = res.string_pool + header->string_pool_len;
   expect(file_size == (end - config_file));
@@ -531,16 +531,16 @@ internal void notify(struct notify_state *state) {
   if (current_config != 0) {
     i32 open_direct = current_config->open_direct;
     if (current_config->open_direct == -1) {
-      open_direct = state->config->defaults->open_direct;
+      open_direct = state->config->config->open_direct;
     }
     if (open_direct != 1) {
       i32 duration = current_config->duration;
       if (current_config->duration == -1) {
-        duration = state->config->defaults->duration;
+        duration = state->config->config->duration;
       }
       struct offset_string sound = current_config->sound;
       if (state->config->string_pool[sound.offset] == 0) {
-        sound = state->config->defaults->sound;
+        sound = state->config->config->sound;
       }
       c8 *sound_type;
       if (state->config->string_pool[sound.offset] != '/') {

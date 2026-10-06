@@ -308,8 +308,7 @@ int main(int argc, char *argv[]) {
     out_current += first_line_end - channels;
     *(out_current++) = '\n';
   } else {
-    cstringcpy(out_current, "TODO: header\n");
-    // TODO: header
+    cstringcpy(out_current, "id,org,name,en_name,open_direct,duration,sound\n");
   }
   for (u32 i = 0; i < num_total_entry; ++i) {
     struct entry *current_entry = sort_order[i];
@@ -323,6 +322,7 @@ int main(int argc, char *argv[]) {
       if (current_entry->en_name.start != 0 && current_entry->en_name.end != 0) {
         out_current = stringcpy(out_current, current_entry->en_name);
       }
+      // TODO: remove the "open_direct=" and use value directly
       cstringcpy(out_current, ",open_direct=");
       if (current_entry->open_direct.start == 0 || current_entry->open_direct.end == 0) {
         *(out_current++) = '?';

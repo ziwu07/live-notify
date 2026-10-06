@@ -10,6 +10,16 @@ struct ptr_string {
   u8 *end;
 };
 
+struct time8 {
+  i8 h;
+  i8 m;
+};
+
+struct period {
+  struct time8 start;
+  struct time8 end;
+};
+
 /*
  * file format:
  * header
@@ -42,6 +52,9 @@ struct __attribute__((__packed__)) config_file_config {
   // stored in ms
   i32 duration;
   struct offset_string sound;
+  struct period silent;
+  struct period pause;
+  struct period open_direct_only;
 };
 
 internal inline i32 cmp_str(const struct ptr_string a, const struct ptr_string b) {
