@@ -91,12 +91,23 @@ internal inline struct ptr_string parse_sound(const struct ptr_string val) {
   return val;
 }
 
+#define parse_field(str)                                                                           \
+  do {                                                                                             \
+    str.start = scan;                                                                              \
+    while (scan < line_end && *scan != ',') {                                                      \
+      scan++;                                                                                      \
+    }                                                                                              \
+    str.end = scan;                                                                                \
+    scan++;                                                                                        \
+  } while (0)
+
 internal u32 parse_channels(u8 *channels, u64 size, struct arena *arena) {
   u8 *ptr = channels;
   u8 *end = channels + size;
   u8 *line_start = ptr;
   u32 entry_count = 0;
   u32 line_count = 0;
+  struct ptr_string field;
 
   while (ptr < end) {
     if (*ptr == '\n' || ptr == end - 1) {
@@ -106,81 +117,16 @@ internal u32 parse_channels(u8 *channels, u64 size, struct arena *arena) {
         struct entry *current_entry = push(arena, sizeof(struct entry));
         u8 *scan = line_start;
 
-        /* field 0: id */
-        current_entry->id.start = scan;
-        while (scan < line_end && *scan != ',') {
-          scan++;
-        }
-        current_entry->id.end = scan;
-        scan++;
-
-        /* field 1: org */
-        current_entry->org.start = scan;
-        while (scan < line_end && *scan != ',') {
-          scan++;
-        }
-        current_entry->org.end = scan;
-        scan++;
-
-        /* field 2: name */
-        current_entry->name.start = scan;
-        while (scan < line_end && *scan != ',') {
-          scan++;
-        }
-        current_entry->name.end = scan;
-        scan++;
-
-        /* field 3: en_name */
-        current_entry->en_name.start = scan;
-        while (scan < line_end && *scan != ',') {
-          scan++;
-        }
-        current_entry->en_name.end = scan;
-        scan++;
-
-        {
-          u8 *eq = scan;
-          while (eq < line_end && *eq != ',') {
-            eq++;
-          }
-          struct ptr_string field = {scan, eq};
-          u8 *dv = field.start;
-          while (dv < field.end && *dv != '=') {
-            dv++;
-          }
-          expect(cstringeq(field.start, dv + 1, "open_direct="));
-          current_entry->open_direct = parse_open_direct((struct ptr_string){dv + 1, field.end});
-          scan = eq + 1;
-        }
-
-        {
-          u8 *eq = scan;
-          while (eq < line_end && *eq != ',') {
-            eq++;
-          }
-          struct ptr_string field = {scan, eq};
-          u8 *dv = field.start;
-          while (dv < field.end && *dv != '=') {
-            dv++;
-          }
-          expect(cstringeq(field.start, dv + 1, "duration="));
-          current_entry->duration = parse_duration((struct ptr_string){dv + 1, field.end});
-          scan = eq + 1;
-        }
-
-        {
-          u8 *eq = scan;
-          while (eq < line_end && *eq != ',') {
-            eq++;
-          }
-          struct ptr_string field = {scan, eq};
-          u8 *dv = field.start;
-          while (dv < field.end && *dv != '=') {
-            dv++;
-          }
-          expect(cstringeq(field.start, dv + 1, "sound="));
-          current_entry->sound = parse_sound((struct ptr_string){dv + 1, field.end});
-        }
+        parse_field(current_entry->id);
+        parse_field(current_entry->org);
+        parse_field(current_entry->name);
+        parse_field(current_entry->en_name);
+        parse_field(field);
+        current_entry->open_direct = parse_open_direct(field);
+        parse_field(field);
+        current_entry->duration = parse_duration(field);
+        parse_field(field);
+        current_entry->sound = parse_sound(field);
 
         entry_count++;
       }

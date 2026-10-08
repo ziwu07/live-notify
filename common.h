@@ -73,6 +73,7 @@ internal inline void *push_align(struct arena *arena, u64 size) {
       (void *)(((u64)arena->current + (_Alignof(max_align_t) - 1)) & ~(_Alignof(max_align_t) - 1));
   arena->current = (u8 *)ret + size;
   if (unlikely(arena->current > arena->max)) {
+    fprintf(stderr, "Out of space!!!!\n");
     exit(1);
   }
   return ret;
@@ -82,6 +83,7 @@ internal inline void *push(struct arena *arena, u64 size) {
   void *ret = arena->current;
   arena->current = (u8 *)ret + size;
   if (unlikely(arena->current > arena->max)) {
+    fprintf(stderr, "Out of space!!!!\n");
     exit(1);
   }
   return ret;

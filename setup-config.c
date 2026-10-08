@@ -59,17 +59,6 @@ internal i32 cmp_entry_by_org_then_name(const void *a, const void *b) {
   return cmp_str(ea->name, eb->name);
 }
 
-internal inline struct ptr_string parse_kv(struct ptr_string field) {
-  u8 *p = field.start;
-  while (p < field.end && *p != '=') {
-    p++;
-  }
-  if (p < field.end) {
-    return (struct ptr_string){p + 1, field.end};
-  }
-  return (struct ptr_string){0, 0};
-}
-
 internal inline i32 stringeq(const struct ptr_string a, const struct ptr_string b) {
   if (a.end - a.start != b.end - b.start) {
     return 0;
@@ -77,7 +66,17 @@ internal inline i32 stringeq(const struct ptr_string a, const struct ptr_string 
   return memcmp(a.start, b.start, a.end - a.start) == 0;
 }
 
-internal u32 parse_channels(u8 *channels, u64 size, struct entry *entries, u8 **first_line_end) {
+#define parse_field(str)                                                                           \
+  do {                                                                                             \
+    str.start = scan;                                                                              \
+    while (scan < line_end && *scan != ',') {                                                      \
+      scan++;                                                                                      \
+    }                                                                                              \
+    str.end = scan;                                                                                \
+    scan++;                                                                                        \
+  } while (0)
+
+internal u32 parse_channels(u8 *channels, u64 size, struct entry *entries) {
   u8 *ptr = channels;
   u8 *end = channels + size;
   u8 *line_start = ptr;
@@ -92,76 +91,16 @@ internal u32 parse_channels(u8 *channels, u64 size, struct entry *entries, u8 **
         struct entry *current_entry = entries + entry_count;
         u8 *scan = line_start;
 
-        /* field 0: id */
-        current_entry->id.start = scan;
-        while (scan < line_end && *scan != ',') {
-          scan++;
-        }
-        current_entry->id.end = scan;
-        scan++;
-
-        /* field 1: org */
-        current_entry->org.start = scan;
-        while (scan < line_end && *scan != ',') {
-          scan++;
-        }
-        current_entry->org.end = scan;
-        scan++;
-
-        /* field 2: name */
-        current_entry->name.start = scan;
-        while (scan < line_end && *scan != ',') {
-          scan++;
-        }
-        current_entry->name.end = scan;
-        scan++;
-
-        /* field 3: en_name */
-        current_entry->en_name.start = scan;
-        while (scan < line_end && *scan != ',') {
-          scan++;
-        }
-        current_entry->en_name.end = scan;
-        scan++;
-
-        /* field 4: open_direct */
-        {
-          u8 *eq = scan;
-          while (eq < line_end && *eq != ',') {
-            eq++;
-          }
-          expect(check_ptr_cstring(scan, "open_direct="));
-          current_entry->open_direct = parse_kv((struct ptr_string){scan, eq});
-          scan = eq + 1;
-        }
-
-        /* field 5: duration */
-        {
-          u8 *eq = scan;
-          while (eq < line_end && *eq != ',') {
-            eq++;
-          }
-          expect(check_ptr_cstring(scan, "duration="));
-          current_entry->duration = parse_kv((struct ptr_string){scan, eq});
-          scan = eq + 1;
-        }
-
-        /* field 6: sound */
-        {
-          u8 *eq = scan;
-          while (eq < line_end && *eq != ',') {
-            eq++;
-          }
-          expect(check_ptr_cstring(scan, "sound="));
-          current_entry->sound = parse_kv((struct ptr_string){scan, eq});
-          scan = eq + 1;
-        }
+        parse_field(current_entry->id);
+        parse_field(current_entry->org);
+        parse_field(current_entry->name);
+        parse_field(current_entry->en_name);
+        parse_field(current_entry->open_direct);
+        parse_field(current_entry->duration);
+        parse_field(current_entry->sound);
 
         entry_count++;
-      } else if (line_count == 0) {
-        *first_line_end = line_end;
       }
-
       line_start = ptr + 1;
       line_count++;
     }
@@ -212,7 +151,6 @@ int main(int argc, char *argv[]) {
   u32 channels_exists = 1;
   struct entry **channels_entry_sort_order = 0;
   u8 *channels;
-  u8 *first_line_end;
   i32 channels_fd = open(channels_path, O_RDONLY);
   if (channels_fd == -1) {
     expect(errno == ENOENT);
@@ -228,7 +166,7 @@ int main(int argc, char *argv[]) {
     expect_errno(channels != MAP_FAILED, "mmap channels.csv");
     close(channels_fd);
 
-    num_channels_entry = parse_channels(channels, channels_size, channels_entries, &first_line_end);
+    num_channels_entry = parse_channels(channels, channels_size, channels_entries);
     mem += sizeof(struct entry) * num_channels_entry;
 
     struct entry **channels_entry_sort_order = (struct entry **)mem;
@@ -303,13 +241,7 @@ int main(int argc, char *argv[]) {
 
   u8 *out_base = mem;
   u8 *out_current = out_base;
-  if (channels_exists) {
-    memcpy(out_current, channels, first_line_end - channels);
-    out_current += first_line_end - channels;
-    *(out_current++) = '\n';
-  } else {
-    cstringcpy(out_current, "id,org,name,en_name,open_direct,duration,sound\n");
-  }
+  cstringcpy(out_current, "id,org,name,en_name,open_direct,duration,sound\n");
   for (u32 i = 0; i < num_total_entry; ++i) {
     struct entry *current_entry = sort_order[i];
     if (i == 0 || !stringeq(sort_order[i - 1]->id, current_entry->id)) {
@@ -322,20 +254,19 @@ int main(int argc, char *argv[]) {
       if (current_entry->en_name.start != 0 && current_entry->en_name.end != 0) {
         out_current = stringcpy(out_current, current_entry->en_name);
       }
-      // TODO: remove the "open_direct=" and use value directly
-      cstringcpy(out_current, ",open_direct=");
+      *(out_current++) = ',';
       if (current_entry->open_direct.start == 0 || current_entry->open_direct.end == 0) {
         *(out_current++) = '?';
       } else {
         out_current = stringcpy(out_current, current_entry->open_direct);
       }
-      cstringcpy(out_current, ",duration=");
+      *(out_current++) = ',';
       if (current_entry->duration.start == 0 || current_entry->duration.end == 0) {
         *(out_current++) = '?';
       } else {
         out_current = stringcpy(out_current, current_entry->duration);
       }
-      cstringcpy(out_current, ",sound=");
+      *(out_current++) = ',';
       if (current_entry->sound.start == 0 || current_entry->sound.end == 0) {
         *(out_current++) = '?';
       } else {
@@ -357,14 +288,12 @@ int main(int argc, char *argv[]) {
         i32 config_fd =
             open(config_path, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
         expect_errno(config_fd != -1, "Error creating config.txt");
-        write(config_fd, CONFIG_TXT_DEFAULT, sizeof(CONFIG_TXT_DEFAULT));
+        write(config_fd, CONFIG_TXT_DEFAULT, sizeof(CONFIG_TXT_DEFAULT) - 1);
         close(config_fd);
       } else {
         perror("Error opening config.txt");
         return 1;
       }
-    } else {
-      return 1;
     }
   }
   return 0;
