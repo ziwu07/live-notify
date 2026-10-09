@@ -302,10 +302,10 @@ int main(int argc, char *argv[]) {
   parse_config(config_file, config_size, &parsed_config, &default_sound_str);
   u32 num_channels_entry = parse_channels(channels, channels_size, arena);
 
-  if (unlikely(num_channels_entry == 0)) {
-    fprintf(stderr, "Error: no entries found in channels.csv\n");
-    return 1;
-  }
+  // if (unlikely(num_channels_entry == 0)) {
+  //   fprintf(stderr, "Error: no entries found in channels.csv\n");
+  //   return 1;
+  // }
 
   struct entry **channels_entry_sort_order =
       (struct entry **)push(arena, num_channels_entry * sizeof(struct entry *));
@@ -331,7 +331,7 @@ int main(int argc, char *argv[]) {
     u8 *prefix = push(arena, sizeof(PREFIX) - 1);
     query_str_len += sizeof(PREFIX) - 1;
     memcpy(prefix, PREFIX, sizeof(PREFIX) - 1);
-    for (u32 i = 0; i < num_channels_entry - 1; ++i) {
+    for (u32 i = 0; i < num_channels_entry; ++i) {
       struct entry *entry = channels_entries + i;
       u8 *id = push(arena, entry->id.end - entry->id.start + 3);
       query_str_len += entry->id.end - entry->id.start + 3;
