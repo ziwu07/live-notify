@@ -236,6 +236,7 @@ internal inline void parse_config(u8 *config_file, u64 size, struct config_file_
   }
   if (!has_sound) {
   }
+  // TODO: enforce time constraint
 }
 
 internal inline struct offset_string cpy_field(struct arena *arena, struct ptr_string str) {

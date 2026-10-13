@@ -628,27 +628,35 @@ internal void notify(struct notify_state *state) {
 internal inline u32 time_diff(struct time8 time, struct tm *tm) {
   u32 target_m = time.h * 60 + time.m;
   u32 current_m = tm->tm_hour * 60 + tm->tm_min;
-  u32 diff = target_m >= current_m ? target_m - current_m : 24 * 60 - current_m + target_m;
+  u32 diff = target_m > current_m ? target_m - current_m : 24 * 60 - current_m + target_m;
   return diff;
 }
 
 internal void process_active_state_transition_event(struct notify_state *state,
-                                                    struct config_file_config *config) {
+                                                    struct config_file_config *config, i32 tfd) {
+  expect(!(state->active_state_set & state->active_state_reset));
   if (state->active_state_set & 0b1) {
     state->puase = 1;
+    state->active_state_set &= ~0b1;
   } else if (state->active_state_reset & 0b1) {
     state->puase = 0;
+    state->active_state_reset &= ~0b1;
   }
   if (state->active_state_set & 0b10) {
     state->silent = 1;
+    state->active_state_set &= ~0b10;
   } else if (state->active_state_reset & 0b10) {
     state->silent = 0;
+    state->active_state_reset &= ~0b10;
   }
   if (state->active_state_set & 0b100) {
     state->open_direct_only = 1;
+    state->active_state_set &= ~0b100;
   } else if (state->active_state_reset & 0b100) {
     state->open_direct_only = 0;
+    state->active_state_reset &= ~0b100;
   }
+  expect(!(state->active_state_set) && !(state->active_state_reset));
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME_COARSE, &ts);
   struct tm tm;
@@ -666,7 +674,31 @@ internal void process_active_state_transition_event(struct notify_state *state,
       min_idx = i;
     }
   }
-  switch (min_idx) {}
+  switch (min_idx) {
+  case 0: {
+    state->active_state_set |= 0b1;
+  } break;
+  case 1: {
+    state->active_state_reset |= 0b1;
+  } break;
+  case 2: {
+    state->active_state_set |= 0b10;
+  } break;
+  case 3: {
+    state->active_state_reset |= 0b10;
+  } break;
+  case 4: {
+    state->active_state_set |= 0b100;
+  } break;
+  case 5: {
+    state->active_state_reset |= 0b100;
+  } break;
+  }
+  u32 diff = diffs[min_idx];
+  ts.tv_sec += diff * 60;
+  ts.tv_nsec = 0;
+  struct itimerspec its = {.it_interval = {0}, .it_value = ts};
+  timerfd_settime(tfd, TFD_TIMER_ABSTIME, &its, 0);
 }
 
 internal volatile sig_atomic_t quit = 0;
