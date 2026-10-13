@@ -521,6 +521,13 @@ struct notify_state {
   u32 i;
   u32 pfp_path_len; // persistent
   u32 num_new;
+  u32 puase;
+  u32 silent;
+  u32 open_direct_only;
+  // bit field where 1 is a set, bit0: pause, bit1: silent, bit2: open_direct_only
+  u32 active_state_set;
+  // bit field where 1 is a reset, bit0: pause, bit1: silent, bit2: open_direct_only
+  u32 active_state_reset;
 };
 
 internal void notify(struct notify_state *state) {
@@ -615,6 +622,51 @@ internal void notify(struct notify_state *state) {
       }
     }
   }
+}
+
+// mins until the next time8 time that has not yet past according to tm
+internal inline u32 time_diff(struct time8 time, struct tm *tm) {
+  u32 target_m = time.h * 60 + time.m;
+  u32 current_m = tm->tm_hour * 60 + tm->tm_min;
+  u32 diff = target_m >= current_m ? target_m - current_m : 24 * 60 - current_m + target_m;
+  return diff;
+}
+
+internal void process_active_state_transition_event(struct notify_state *state,
+                                                    struct config_file_config *config) {
+  if (state->active_state_set & 0b1) {
+    state->puase = 1;
+  } else if (state->active_state_reset & 0b1) {
+    state->puase = 0;
+  }
+  if (state->active_state_set & 0b10) {
+    state->silent = 1;
+  } else if (state->active_state_reset & 0b10) {
+    state->silent = 0;
+  }
+  if (state->active_state_set & 0b100) {
+    state->open_direct_only = 1;
+  } else if (state->active_state_reset & 0b100) {
+    state->open_direct_only = 0;
+  }
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME_COARSE, &ts);
+  struct tm tm;
+  localtime_r(&ts.tv_sec, &tm);
+  u32 diffs[6];
+  u32 min_idx = 0;
+  diffs[0] = time_diff(config->pause.start, &tm);
+  diffs[1] = time_diff(config->pause.end, &tm);
+  diffs[2] = time_diff(config->silent.start, &tm);
+  diffs[3] = time_diff(config->silent.end, &tm);
+  diffs[4] = time_diff(config->open_direct_only.start, &tm);
+  diffs[5] = time_diff(config->open_direct_only.end, &tm);
+  for (u32 i = 1; i < 6; ++i) {
+    if (diffs[i] < diffs[min_idx]) {
+      min_idx = i;
+    }
+  }
+  switch (min_idx) {}
 }
 
 internal volatile sig_atomic_t quit = 0;
@@ -728,7 +780,7 @@ int main(int argc, char *argv[]) {
     }
     struct timespec ts;
     i32 ret;
-    ret = clock_gettime(CLOCK_REALTIME, &ts);
+    ret = clock_gettime(CLOCK_REALTIME_COARSE, &ts);
     check_ret_syscall("Failed to get current time");
     // ts.tv_sec = (ts.tv_sec / 60 + DELAY_MINUTE) * 60;
     // ts.tv_nsec = 0;
@@ -961,7 +1013,11 @@ int main(int argc, char *argv[]) {
                                .notify_list = notify_list,
                                .i = 0,
                                .pfp_path_len = pfp_path_len,
-                               .num_new = 0};
+                               .num_new = 0,
+                               .puase = 0,
+                               .silent = 0,
+                               .open_direct_only = 0,
+                               .active_state_transition = 0};
 
   struct arena arena_0 = {0};
   struct arena arena_1 = {0};
