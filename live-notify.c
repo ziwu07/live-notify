@@ -560,13 +560,24 @@ internal void notify(struct notify_state *state) {
       memcpy(image_uri + 7, state->pfp_path, state->pfp_path_len);
       memcpy(image_uri + 7 + state->pfp_path_len, cur->photo_path, cur->photo_path_len);
       sd_bus_message *msg = 0;
-      i32 ret = sd_bus_call_method(
-          state->bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
-          "org.freedesktop.Notifications", "Notify", 0, &msg, "susssasa{sv}i", "live-notify", 0,
-          favicon, state->config->string_pool + current_config->name.offset, cur->title, 2,
-          "default", "default", 4, "category", "s", "im.received", "image-path", "s", image_uri,
-          sound_type, "s", state->config->string_pool + sound.offset, "urgency", "y", 1, duration);
-      expect(ret >= 0);
+      if (state->silent) {
+        i32 ret = sd_bus_call_method(
+            state->bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+            "org.freedesktop.Notifications", "Notify", 0, &msg, "susssasa{sv}i", "live-notify", 0,
+            favicon, state->config->string_pool + current_config->name.offset, cur->title, 2,
+            "default", "default", 4, "category", "s", "im.received", "image-path", "s", image_uri,
+            "suppress-sound", "b", 1, "urgency", "y", 1, duration);
+        expect(ret >= 0);
+      } else {
+        i32 ret = sd_bus_call_method(
+            state->bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+            "org.freedesktop.Notifications", "Notify", 0, &msg, "susssasa{sv}i", "live-notify", 0,
+            favicon, state->config->string_pool + current_config->name.offset, cur->title, 2,
+            "default", "default", 4, "category", "s", "im.received", "image-path", "s", image_uri,
+            sound_type, "s", state->config->string_pool + sound.offset, "urgency", "y", 1,
+            duration);
+        expect(ret >= 0);
+      }
       u32 id = 0;
       sd_bus_message_read_basic(msg, 'u', &id);
       sd_bus_message_unref(msg);
@@ -845,6 +856,15 @@ int main(int argc, char *argv[]) {
     check_ret_syscall("Failed to set timer");
   }
 
+  i32 state_timer_fd;
+  {
+    state_timer_fd = timerfd_create(CLOCK_REALTIME, 0);
+    if (unlikely(state_timer_fd == -1)) {
+      perror("Failed to create timer");
+      return 1;
+    }
+  }
+
   // curl
   sd_bus *bus = 0;
   CURLcode curlcode;
@@ -1012,12 +1032,19 @@ int main(int argc, char *argv[]) {
       curl_global_cleanup();
       return 1;
     }
+
     struct epoll_event event = {.events = EPOLLIN, .data.u32 = TIMER_RETURN};
     i32 ret = epoll_ctl(epollfd, EPOLL_CTL_ADD, tfd, &event);
     expect_errno(ret >= 0, "epoll_ctl ADD timerfd");
+
     event.data.u32 = DELAY_RETURN;
     ret = epoll_ctl(epollfd, EPOLL_CTL_ADD, delay_tfd, &event);
     expect_errno(ret >= 0, "epoll_ctl ADD delay timerfd");
+
+    event.data.u32 = STATE_EVENT_RETURN;
+    ret = epoll_ctl(epollfd, EPOLL_CTL_ADD, state_timer_fd, &event);
+    expect_errno(ret >= 0, "epoll_ctl ADD state_timer_fd");
+
     sd_bus_fd = sd_bus_get_fd(bus);
     expect(sd_bus_fd >= 0);
     event.events = 0, event.data.u32 = SD_BUS_RETURN;
@@ -1049,7 +1076,8 @@ int main(int argc, char *argv[]) {
                                .puase = 0,
                                .silent = 0,
                                .open_direct_only = 0,
-                               .active_state_transition = 0};
+                               .active_state_set = 0,
+                               .active_state_reset = 0};
 
   struct arena arena_0 = {0};
   struct arena arena_1 = {0};
@@ -1062,6 +1090,8 @@ int main(int argc, char *argv[]) {
     arena_1.max = (u8 *)arena->max;
     arena->max = arena->current;
   }
+
+  process_active_state_transition_event(&state, config.config, state_timer_fd);
 
   while (!quit) {
 
@@ -1079,19 +1109,22 @@ int main(int argc, char *argv[]) {
       expect_errno(ret >= 0, "epoll_ctl MOD sd_bus");
     }
 
-    struct epoll_event events[3] = {{0}, {0}, {0}};
+    struct epoll_event events[1] = {{0}};
     {
-      i32 ret = epoll_wait(epollfd, events, 3, 100);
+      i32 ret = epoll_wait(epollfd, events, 1, -1);
       expect(ret >= 0 || errno == EINTR);
     }
 
     while (sd_bus_process(bus, NULL) != 0) {
     }
 
+    if (events[0].data.u32 == STATE_EVENT_RETURN) {
+      process_active_state_transition_event(&state, config.config, state_timer_fd);
+    }
+
     // next poll
     // something to assert no current notif
-    if ((events[0].data.u32 == TIMER_RETURN || events[1].data.u32 == TIMER_RETURN ||
-         events[2].data.u32 == TIMER_RETURN)) {
+    if (events[0].data.u32 == TIMER_RETURN) {
       {
         u64 r = read(tfd, &timer_out, 8);
         if (r != 8) {
@@ -1228,8 +1261,7 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    if (events[0].data.u32 == DELAY_RETURN || events[1].data.u32 == DELAY_RETURN ||
-        events[2].data.u32 == DELAY_RETURN) {
+    if (events[0].data.u32 == DELAY_RETURN) {
       {
         read(delay_tfd, &timer_out, 8);
       }

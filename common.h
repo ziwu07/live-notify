@@ -37,6 +37,7 @@
 #define TIMER_RETURN 1
 #define SD_BUS_RETURN 2
 #define DELAY_RETURN 3
+#define STATE_EVENT_RETURN 3
 
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
