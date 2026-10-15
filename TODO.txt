@@ -4,3 +4,4 @@ set time ranges in local time where:
   no audiable notifications? (still dbus notify but with no sound) silent
   nothing at all? pause
 size check for get_file_path
+notify delay does not consider open_direct to be special

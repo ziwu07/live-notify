@@ -541,73 +541,75 @@ internal void notify(struct notify_state *state) {
       open_direct = state->config->config->open_direct;
     }
     if (open_direct != 1) {
-      i32 duration = current_config->duration;
-      if (current_config->duration == -1) {
-        duration = state->config->config->duration;
-      }
-      struct offset_string sound = current_config->sound;
-      if (state->config->string_pool[sound.offset] == 0) {
-        sound = state->config->config->sound;
-      }
-      c8 *sound_type;
-      if (state->config->string_pool[sound.offset] != '/') {
-        sound_type = "sound-name";
-      } else {
-        sound_type = "sound-file";
-      }
-      c8 *favicon = cur->link[0] == 0 ? state->youtube_favicon : state->twitch_favicon;
-      c8 image_uri[7 + PATH_MAX] = "file://";
-      memcpy(image_uri + 7, state->pfp_path, state->pfp_path_len);
-      memcpy(image_uri + 7 + state->pfp_path_len, cur->photo_path, cur->photo_path_len);
-      sd_bus_message *msg = 0;
-      if (state->silent) {
-        i32 ret = sd_bus_call_method(
-            state->bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
-            "org.freedesktop.Notifications", "Notify", 0, &msg, "susssasa{sv}i", "live-notify", 0,
-            favicon, state->config->string_pool + current_config->name.offset, cur->title, 2,
-            "default", "default", 4, "category", "s", "im.received", "image-path", "s", image_uri,
-            "suppress-sound", "b", 1, "urgency", "y", 1, duration);
-        expect(ret >= 0);
-      } else {
-        i32 ret = sd_bus_call_method(
-            state->bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
-            "org.freedesktop.Notifications", "Notify", 0, &msg, "susssasa{sv}i", "live-notify", 0,
-            favicon, state->config->string_pool + current_config->name.offset, cur->title, 2,
-            "default", "default", 4, "category", "s", "im.received", "image-path", "s", image_uri,
-            sound_type, "s", state->config->string_pool + sound.offset, "urgency", "y", 1,
-            duration);
-        expect(ret >= 0);
-      }
-      u32 id = 0;
-      sd_bus_message_read_basic(msg, 'u', &id);
-      sd_bus_message_unref(msg);
-      i32 min_idx = 0;
-      for (u32 i = 0; i < NUM_NOTIFICATION_MAX; ++i) {
-        if (state->notify_list[i].id == 0) {
-          state->notify_list[i].id = id;
+      if (!state->open_direct_only) {
+        i32 duration = current_config->duration;
+        if (current_config->duration == -1) {
+          duration = state->config->config->duration;
+        }
+        struct offset_string sound = current_config->sound;
+        if (state->config->string_pool[sound.offset] == 0) {
+          sound = state->config->config->sound;
+        }
+        c8 *sound_type;
+        if (state->config->string_pool[sound.offset] != '/') {
+          sound_type = "sound-name";
+        } else {
+          sound_type = "sound-file";
+        }
+        c8 *favicon = cur->link[0] == 0 ? state->youtube_favicon : state->twitch_favicon;
+        c8 image_uri[7 + PATH_MAX] = "file://";
+        memcpy(image_uri + 7, state->pfp_path, state->pfp_path_len);
+        memcpy(image_uri + 7 + state->pfp_path_len, cur->photo_path, cur->photo_path_len);
+        sd_bus_message *msg = 0;
+        if (state->silent) {
+          i32 ret = sd_bus_call_method(
+              state->bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+              "org.freedesktop.Notifications", "Notify", 0, &msg, "susssasa{sv}i", "live-notify", 0,
+              favicon, state->config->string_pool + current_config->name.offset, cur->title, 2,
+              "default", "default", 4, "category", "s", "im.received", "image-path", "s", image_uri,
+              "suppress-sound", "b", 1, "urgency", "y", 1, duration);
+          expect(ret >= 0);
+        } else {
+          i32 ret = sd_bus_call_method(
+              state->bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+              "org.freedesktop.Notifications", "Notify", 0, &msg, "susssasa{sv}i", "live-notify", 0,
+              favicon, state->config->string_pool + current_config->name.offset, cur->title, 2,
+              "default", "default", 4, "category", "s", "im.received", "image-path", "s", image_uri,
+              sound_type, "s", state->config->string_pool + sound.offset, "urgency", "y", 1,
+              duration);
+          expect(ret >= 0);
+        }
+        u32 id = 0;
+        sd_bus_message_read_basic(msg, 'u', &id);
+        sd_bus_message_unref(msg);
+        i32 min_idx = 0;
+        for (u32 i = 0; i < NUM_NOTIFICATION_MAX; ++i) {
+          if (state->notify_list[i].id == 0) {
+            state->notify_list[i].id = id;
+            if (cur->link[0] == 0) {
+              memcpy(state->notify_list[i].link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
+              expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
+              memcpy(state->notify_list[i].link + sizeof(YOUTUBE_LINK) - 1, cur->id, cur->id_len);
+            } else {
+              expect(cur->link_len <= LINK_MAX_LEN);
+              memcpy(state->notify_list[i].link, cur->link, cur->link_len);
+            }
+            min_idx = -1;
+            break;
+          } else if (state->notify_list[i].id < state->notify_list[min_idx].id) {
+            min_idx = i;
+          }
+        }
+        if (min_idx != -1) {
+          state->notify_list[min_idx].id = id;
           if (cur->link[0] == 0) {
-            memcpy(state->notify_list[i].link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
+            memcpy(state->notify_list[min_idx].link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
             expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
-            memcpy(state->notify_list[i].link + sizeof(YOUTUBE_LINK) - 1, cur->id, cur->id_len);
+            memcpy(state->notify_list[min_idx].link + sizeof(YOUTUBE_LINK), cur->id, cur->id_len);
           } else {
             expect(cur->link_len <= LINK_MAX_LEN);
-            memcpy(state->notify_list[i].link, cur->link, cur->link_len);
+            memcpy(state->notify_list[min_idx].link, cur->link, cur->link_len);
           }
-          min_idx = -1;
-          break;
-        } else if (state->notify_list[i].id < state->notify_list[min_idx].id) {
-          min_idx = i;
-        }
-      }
-      if (min_idx != -1) {
-        state->notify_list[min_idx].id = id;
-        if (cur->link[0] == 0) {
-          memcpy(state->notify_list[min_idx].link, YOUTUBE_LINK, sizeof(YOUTUBE_LINK) - 1);
-          expect(cur->id_len + sizeof(YOUTUBE_LINK) <= LINK_MAX_LEN);
-          memcpy(state->notify_list[min_idx].link + sizeof(YOUTUBE_LINK), cur->id, cur->id_len);
-        } else {
-          expect(cur->link_len <= LINK_MAX_LEN);
-          memcpy(state->notify_list[min_idx].link, cur->link, cur->link_len);
         }
       }
     } else {
@@ -1132,7 +1134,7 @@ int main(int argc, char *argv[]) {
         }
       }
 
-      if (!state.num_new) {
+      if (!state.num_new && !state.puase) {
 
         {
           struct stat st = {};
