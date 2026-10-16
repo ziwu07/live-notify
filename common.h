@@ -17,6 +17,7 @@
 #define internal static
 
 #define PROJECT_PATH_NAME "/live-notify"
+#define IPC_PATH "/tmp" PROJECT_PATH_NAME
 #define API_DATA_SIZE (8 * 1024 * 1024)
 #define LINK_MAX_LEN (128 - 4)
 #define ALLOC_MEM (64 * 1024 * 1024)

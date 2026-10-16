@@ -455,6 +455,7 @@ internal inline void save_session(struct live_status *current_status, u32 num_cu
   check_ret_syscall("ftruncate on session.bin");
   u8 *base = mmap(0, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   expect_errno(base != MAP_FAILED, "Memory error");
+  close(fd);
   struct session_file_header *header = (struct session_file_header *)base;
   header->magic = SESSION_FILE_MAGIC;
   header->version = 1;
@@ -724,11 +725,26 @@ internal void signal_handler(i32 signal) {
 int main(int argc, char *argv[]) {
   (void)argc, (void)argv;
 
+  i32 ipc_fd;
+  {
+    i32 ret = mkfifo(IPC_PATH, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (ret == -1) {
+      if (errno == EEXIST) {
+        // TODO:
+        fprintf(stderr, "");
+      } else {
+        // TODO:
+      }
+      return 1;
+    }
+    ipc_fd = open(IPC_PATH, O_RDONLY | O_NONBLOCK);
+  }
+
   struct arena _arena;
   struct arena *arena = &_arena;
   {
-    arena->mem = arena->current =
-        mmap(NULL, ALLOC_MEM, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    arena->mem = arena->current = mmap(NULL, ALLOC_MEM, PROT_READ | PROT_WRITE,
+                                       MAP_ANONYMOUS | MAP_PRIVATE | MAP_HUGE_2MB, -1, 0);
     if (unlikely(arena->mem == MAP_FAILED)) {
       return 1;
     }
@@ -1117,15 +1133,16 @@ int main(int argc, char *argv[]) {
       expect(ret >= 0 || errno == EINTR);
     }
 
-    while (sd_bus_process(bus, NULL) != 0) {
+    if (events[0].data.u32 == SD_BUS_RETURN) {
+      // TODO: error when error
+      while (sd_bus_process(bus, NULL) != 0) {
+      }
     }
 
     if (events[0].data.u32 == STATE_EVENT_RETURN) {
       process_active_state_transition_event(&state, config.config, state_timer_fd);
     }
 
-    // next poll
-    // something to assert no current notif
     if (events[0].data.u32 == TIMER_RETURN) {
       {
         u64 r = read(tfd, &timer_out, 8);
